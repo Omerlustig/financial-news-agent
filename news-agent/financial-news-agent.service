@@ -1,0 +1,28 @@
+[Unit]
+Description=Financial Market News Intelligence & Alerting Agent
+Documentation=https://github.com/omer/financial-news-agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/news-agent
+EnvironmentFile=/etc/financial-news-agent.env
+ExecStart=/opt/news-agent/venv/bin/python -m src.main run --daemon --interval 15
+Restart=always
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+# Hardening measures
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

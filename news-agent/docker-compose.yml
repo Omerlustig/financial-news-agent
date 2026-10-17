@@ -1,0 +1,23 @@
+version: "3.8"
+
+services:
+  news-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: news-agent:latest
+    container_name: financial-news-agent
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./config:/app/config:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DATABASE_PATH=/app/data/agent.db
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
