@@ -94,5 +94,71 @@ def test_load_actual_settings_yaml():
     settings = load_settings()
     assert settings.agent.polling_interval_minutes > 0
     assert settings.filter.min_confidence_score >= 1
-    assert settings.filter.min_impact_grade in [e.value for e in ImpactGrade]
+    assert isinstance(settings.filter.min_impact_grade, ImpactGrade)
+    assert settings.filter.min_impact_grade == ImpactGrade.HIGH
     assert settings.llm.model
+    # Unset telegram env vars should resolve to None rather than empty string
+    assert settings.telegram.bot_token is None or isinstance(settings.telegram.bot_token, str)
+
+
+def test_affected_tickers_normalization():
+    # String with comma-separated tickers
+    analysis1 = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=8,
+        impact_grade=ImpactGrade.HIGH,
+        affected_tickers="NVDA, AAPL, $msft",  # string input
+        affected_sectors=["Tech"],
+        summary="Test summary",
+        catalyst_thesis="Test thesis",
+    )
+    assert analysis1.affected_tickers == ["$NVDA", "$AAPL", "$MSFT"]
+
+    # Single string ticker
+    analysis2 = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=8,
+        impact_grade=ImpactGrade.HIGH,
+        affected_tickers="tsm",  # single string
+        affected_sectors=["Tech"],
+        summary="Test summary",
+        catalyst_thesis="Test thesis",
+    )
+    assert analysis2.affected_tickers == ["$TSM"]
+
+    # List input
+    analysis3 = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=8,
+        impact_grade=ImpactGrade.HIGH,
+        affected_tickers=["nvda", "$aapl", "AMZN"],
+        affected_sectors=["Tech"],
+        summary="Test summary",
+        catalyst_thesis="Test thesis",
+    )
+    assert analysis3.affected_tickers == ["$NVDA", "$AAPL", "$AMZN"]
+
+
+def test_min_impact_grade_validation(tmp_path):
+    from pydantic import ValidationError
+
+    # Valid string or enum parses to ImpactGrade
+    settings = Settings.model_validate({
+        "filter": {"min_impact_grade": "CRITICAL"}
+    })
+    assert settings.filter.min_impact_grade == ImpactGrade.CRITICAL
+
+    # Invalid impact grade raises ValidationError
+    with pytest.raises(ValidationError):
+        Settings.model_validate({
+            "filter": {"min_impact_grade": "INVALID_GRADE"}
+        })
+
+
+def test_telegram_empty_env_to_none():
+    # If env var is unset in yaml expansion, it should evaluate to None
+    settings = Settings.model_validate({
+        "telegram": {"bot_token": "", "chat_id": ""}
+    })
+    assert settings.telegram.bot_token is None
+    assert settings.telegram.chat_id is None

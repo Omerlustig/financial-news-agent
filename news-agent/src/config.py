@@ -3,7 +3,8 @@ import re
 from pathlib import Path
 from typing import Any, List, Optional
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+from src.models import ImpactGrade
 
 try:
     from dotenv import load_dotenv
@@ -33,7 +34,7 @@ class AgentSettings(BaseModel):
 
 class FilterSettings(BaseModel):
     min_confidence_score: int = Field(default=6, ge=1, le=10, description="Minimum score to trigger notification.")
-    min_impact_grade: str = Field(default="HIGH", description="Minimum severity grade (e.g. HIGH, CRITICAL).")
+    min_impact_grade: ImpactGrade = Field(default=ImpactGrade.HIGH, description="Minimum severity grade (e.g. HIGH, CRITICAL).")
     alert_on_all: bool = Field(default=False, description="If True, bypasses filter threshold for testing.")
 
 
@@ -46,6 +47,14 @@ class LLMSettings(BaseModel):
 class TelegramSettings(BaseModel):
     bot_token: Optional[str] = Field(default=None, description="Telegram bot authorization token.")
     chat_id: Optional[str] = Field(default=None, description="Destination Telegram chat or channel ID.")
+
+    @field_validator("bot_token", "chat_id", mode="before")
+    @classmethod
+    def empty_str_to_none(cls, v: Any) -> Optional[str]:
+        if v is None:
+            return None
+        s = str(v).strip()
+        return s if s else None
 
 
 class Settings(BaseModel):
@@ -63,12 +72,22 @@ def _expand_env_vars(data: Any) -> Any:
     elif isinstance(data, list):
         return [_expand_env_vars(item) for item in data]
     elif isinstance(data, str):
+        exact_match = re.fullmatch(r"\$\{([A-Za-z0-9_]+)(?::-([^}]*))?\}", data.strip())
+        if exact_match:
+            env_var = exact_match.group(1)
+            default_val = exact_match.group(2) if exact_match.group(2) is not None else None
+            val = os.environ.get(env_var, default_val)
+            if val is None or val == "":
+                return None
+            return val
+
         pattern = re.compile(r"\$\{([A-Za-z0-9_]+)(?::-([^}]*))?\}")
         def replace(match: re.Match) -> str:
             env_var = match.group(1)
             default_val = match.group(2) if match.group(2) is not None else ""
             return os.environ.get(env_var, default_val)
-        return pattern.sub(replace, data)
+        expanded = pattern.sub(replace, data)
+        return expanded if expanded != "" else None
     return data
 
 

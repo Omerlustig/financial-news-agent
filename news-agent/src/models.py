@@ -1,7 +1,7 @@
 import hashlib
 from datetime import datetime
 from enum import Enum
-from typing import List, Optional
+from typing import Any, List, Optional
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -65,9 +65,11 @@ class MarketImpactAnalysis(BaseModel):
 
     @field_validator("affected_tickers", mode="before")
     @classmethod
-    def normalize_tickers(cls, v: List[str]) -> List[str]:
+    def normalize_tickers(cls, v: Any) -> List[str]:
         if not v:
             return []
+        if isinstance(v, str):
+            v = [t.strip() for t in v.split(",") if t.strip()]
         normalized = []
         for ticker in v:
             cleaned = str(ticker).strip().upper()
