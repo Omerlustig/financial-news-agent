@@ -4,6 +4,7 @@ import email.utils
 import html
 import logging
 import re
+import socket
 from typing import Any, List, Optional
 import feedparser
 
@@ -19,6 +20,7 @@ from src.models import RawArticle
 logger = logging.getLogger(__name__)
 
 USER_AGENT = "MarketNewsAgent/0.1.0 (+https://github.com/market-news-agent)"
+DEFAULT_TIMEOUT_SECONDS = 15.0
 
 
 def clean_html(text: Optional[str]) -> str:
@@ -32,8 +34,10 @@ def clean_html(text: Optional[str]) -> str:
     """
     if not text:
         return ""
+    # Strip <script> and <style> blocks along with their content first
+    cleaned = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", text)
     # Replace block-level tags and line breaks with spaces
-    cleaned = re.sub(r"(?i)<(br|p|div|li|tr|h[1-6])[^>]*>", " ", text)
+    cleaned = re.sub(r"(?i)<(br|p|div|li|tr|h[1-6])[^>]*>", " ", cleaned)
     # Strip all remaining tags
     cleaned = re.sub(r"<[^>]+>", "", cleaned)
     # Unescape HTML entities (&amp;, &lt;, &gt;, &quot;, &#39;, etc.)
@@ -70,6 +74,8 @@ def parse_datetime(raw_date: Any, struct_time: Optional[Any] = None) -> Optional
     try:
         dt = email.utils.parsedate_to_datetime(raw_date)
         if dt is not None:
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
             return dt.astimezone(timezone.utc)
     except Exception:
         pass
@@ -105,9 +111,15 @@ def parse_datetime(raw_date: Any, struct_time: Optional[Any] = None) -> Optional
 class RSSFetcher(BaseFetcher):
     """Fetcher for RSS and Atom news feeds using feedparser."""
 
-    def __init__(self, source_config: SourceConfig, user_agent: str = USER_AGENT) -> None:
+    def __init__(
+        self,
+        source_config: SourceConfig,
+        user_agent: str = USER_AGENT,
+        timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    ) -> None:
         super().__init__(source_config)
         self.user_agent = user_agent
+        self.timeout = timeout
 
     def fetch(self) -> List[RawArticle]:
         """Fetch and parse articles from the configured RSS/Atom feed.
@@ -118,8 +130,14 @@ class RSSFetcher(BaseFetcher):
         url = self.source_config.url
         logger.info("Fetching RSS feed for source '%s' from %s", self.source_config.name, url)
 
+        old_timeout = socket.getdefaulttimeout()
         try:
-            parsed = feedparser.parse(url, agent=self.user_agent)
+            socket.setdefaulttimeout(self.timeout)
+            parsed = feedparser.parse(
+                url,
+                agent=self.user_agent,
+                request_headers={"User-Agent": self.user_agent},
+            )
         except Exception as exc:
             logger.warning(
                 "Network or parser error fetching RSS feed '%s' (%s): %s",
@@ -128,6 +146,8 @@ class RSSFetcher(BaseFetcher):
                 exc,
             )
             return []
+        finally:
+            socket.setdefaulttimeout(old_timeout)
 
         if parsed is None:
             logger.warning("Feedparser returned None for '%s' (%s)", self.source_config.name, url)
@@ -284,7 +304,7 @@ class RSSFetcher(BaseFetcher):
         )
 
 
-def fetch_all_sources(sources: List[SourceConfig]) -> List[RawArticle]:
+def fetch_all_sources(sources: List[SourceConfig], timeout: float = DEFAULT_TIMEOUT_SECONDS) -> List[RawArticle]:
     """Fetch articles from all enabled sources with feed-level error containment.
 
     Iterates through all configured sources, skips disabled sources, and executes
@@ -293,6 +313,7 @@ def fetch_all_sources(sources: List[SourceConfig]) -> List[RawArticle]:
 
     Args:
         sources: List of SourceConfig instances to poll.
+        timeout: Socket timeout in seconds for feed requests.
 
     Returns:
         List[RawArticle]: Aggregated list of raw articles from all successfully polled sources.
@@ -311,7 +332,7 @@ def fetch_all_sources(sources: List[SourceConfig]) -> List[RawArticle]:
             continue
 
         try:
-            fetcher = RSSFetcher(source)
+            fetcher = RSSFetcher(source, timeout=timeout)
             articles = fetcher.fetch()
             all_articles.extend(articles)
         except Exception as exc:

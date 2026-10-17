@@ -229,12 +229,45 @@ def test_clean_html_utility():
     assert clean_html("Simple text") == "Simple text"
     assert clean_html("<div>Line 1</div><p>Line 2</p>") == "Line 1 Line 2"
     assert clean_html("&lt;tag&gt; &amp; &quot;quote&quot;") == '<tag> & "quote"'
+    # Test script and style stripping with enclosed contents
+    html_with_scripts = (
+        "<style>.banner { display: none; }</style>"
+        "<p>Material catalyst</p>"
+        "<script type=\"text/javascript\">fetch('/tracker');</script>"
+    )
+    assert clean_html(html_with_scripts) == "Material catalyst"
 
 
 def test_parse_datetime_utility():
     assert parse_datetime(None) is None
     assert parse_datetime("") is None
     assert parse_datetime("invalid-date-string-xyz") is None
+    # Test naive RFC 822 string (no timezone offset) is properly set to UTC
+    naive_rfc822 = "17 Oct 2026 12:00:00"
+    parsed_naive = parse_datetime(naive_rfc822)
+    assert parsed_naive is not None
+    assert parsed_naive.tzinfo == datetime.timezone.utc
+    assert parsed_naive == datetime.datetime(2026, 10, 17, 12, 0, tzinfo=datetime.timezone.utc)
+
+
+def test_rss_fetcher_manages_socket_timeout():
+    import socket
+    src = SourceConfig(name="Timeout Feed", type="rss", url="https://example.com/rss", enabled=True)
+    previous_timeout = socket.getdefaulttimeout()
+
+    observed_timeout = []
+    def mock_parse_inspect_timeout(*args, **kwargs):
+        observed_timeout.append(socket.getdefaulttimeout())
+        return {"entries": [], "bozo": 0}
+
+    with patch("feedparser.parse", side_effect=mock_parse_inspect_timeout):
+        fetcher = RSSFetcher(src, timeout=12.5)
+        fetcher.fetch()
+
+    # During parse, timeout should have been set to 12.5
+    assert observed_timeout == [12.5]
+    # After fetch finishes, previous timeout should be restored
+    assert socket.getdefaulttimeout() == previous_timeout
 
 
 def test_fetch_all_sources_isolation():
@@ -269,3 +302,4 @@ def test_fetch_all_sources_isolation():
 def test_fetch_all_sources_empty():
     assert fetch_all_sources([]) == []
     assert fetch_all_sources([SourceConfig(name="Off", type="rss", url="https://off.com", enabled=False)]) == []
+
