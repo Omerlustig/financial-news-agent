@@ -61,7 +61,7 @@ flowchart TD
 ### 2. Installation
 Clone the repository and install dependencies:
 ```bash
-git clone https://github.com/omer/financial-news-agent.git
+git clone https://github.com/Omerlustig/financial-news-agent.git
 cd financial-news-agent/news-agent
 
 # Create and activate a virtual environment
@@ -480,6 +480,7 @@ The agent includes full diagnostic utilities for real-time inspection and verifi
 | `python -m src.main test-telegram` | Dispatches an instant test message to the configured Telegram chat. |
 | `python -m src.main test-source --name "<name>"` | Fetches and displays the top 5 parsed headlines from a single feed. |
 | `python -m src.main stats` | Displays total seen articles, market-moving detections, and alert counts. |
+| `python -m src.main metrics` | Displays total LLM inference counts, tokens, estimated spend, and model breakdown. |
 
 ---
 
