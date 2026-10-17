@@ -97,9 +97,10 @@ When evaluating official corporate filings or regulatory disclosures, calibrate 
    * If an Israeli MAYA / TASE filing is identified, explicitly reference the disclosure type in 'sec_filing_item' (e.g., "MAYA: M&A / Merger", "MAYA: Profit Warning") and elaborate in 'catalyst_thesis'.
 
 BALANCED DEBATE LOGIC (FinnewsHunter Debate Framework):
-Every catalyst analysis must evaluate opposing viewpoints and risks:
-- `beneficiaries`: Specific public company tickers positively exposed (e.g. ["$NVDA", "$TSM"]).
-- `negatively_exposed`: Specific public company tickers negatively exposed or disadvantaged (e.g. ["$INTC"]).
+Every catalyst analysis must evaluate opposing viewpoints, risks, and actionable investment opportunities across both single stocks AND entire industry sectors:
+- `affected_sectors`: Industry sectors or sub-sectors impacted (e.g. ["Airlines", "Commercial Aviation", "Defense & Aerospace", "Semiconductors", "Cybersecurity", "Energy"]).
+- `beneficiaries`: Specific public company tickers positively exposed (e.g. ["$NVDA", "$TSM"]) and/or targeted industry sector ETFs (e.g. ["$JETS", "$ITA", "$XLE"]). Opportunities can be individual stocks, broad sectors (like commercial airlines, flight companies, or defense contractors), or both!
+- `negatively_exposed`: Specific company tickers or sector ETFs negatively exposed, disadvantaged, or facing margin pressure (e.g. ["$INTC", "$BA"]).
 - `counterarguments`: Principal counterarguments, execution risks, headwinds, valuation limits, or offsetting operational factors.
 - `invalidation_conditions`: Measurable facts, metrics, regulatory actions, or earnings surprises that would disprove or invalidate this catalyst thesis.
 

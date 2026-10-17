@@ -970,7 +970,7 @@ def test_render_actionable_investment_bottom_line():
     output = buf.getvalue()
 
     assert "ACTIONABLE INVESTMENT BOTTOM LINE" in output
-    assert "STOCKS TO INVEST IN (BENEFICIARIES)" in output
+    assert "STOCKS & SECTORS TO INVEST IN (BENEFICIARIES)" in output
     assert "$NVDA" in output
     assert "$TSM" in output
     assert "$INTC" in output
@@ -978,6 +978,60 @@ def test_render_actionable_investment_bottom_line():
     assert "Directional Stance: BULLISH" in output
     assert "Causal Transmission Thesis" in output
     assert "Thesis Invalidation Condition" in output
+
+
+def test_render_actionable_investment_bottom_line_sector_only():
+    """Verify that render_actionable_investment_bottom_line formats sector-level plays when no single stock is named."""
+    from rich.console import Console
+    from io import StringIO
+    from src.cli import render_actionable_investment_bottom_line
+    from src.models import CausalChain, DirectionalStance
+
+    buf = StringIO()
+    test_console = Console(file=buf, force_terminal=False, color_system=None)
+
+    art = RawArticle(
+        title="Global Jet Fuel Price Plunge Boosts Aviation Margins",
+        url="https://example.com/jet-fuel",
+        source_name="Bloomberg",
+        summary="Crude slump reduces jet fuel operating cost by 25%.",
+    )
+    analysis = MarketImpactAnalysis(
+        summary="Aviation fuel operating costs dropping sharply across industry.",
+        catalyst_thesis="Immediate gross margin expansion across commercial carriers.",
+        is_market_moving=True,
+        confidence_score=9,
+        impact_grade=ImpactGrade.HIGH,
+        status=EventStatus.OPPORTUNITY_CANDIDATE,
+        directional_stance=DirectionalStance.BULLISH,
+        affected_tickers=[],  # No specific single stock, broad sector play!
+        affected_sectors=["Commercial Airlines", "Aviation & Travel"],
+        causal_chain=CausalChain(
+            event_facts="Jet fuel prices dropped 25% week-over-week.",
+            economic_mechanism="Direct fuel cost relief flows straight to carrier operating cash flow.",
+            affected_sectors=["Commercial Airlines"],
+            beneficiaries=[],  # No single stock
+            negatively_exposed=[],
+        ),
+    )
+
+    summary = CycleSummary(
+        fetched=1,
+        new_unseen=1,
+        analyzed=1,
+        alerted=1,
+        errors=0,
+        top_catalysts=[(art, analysis)],
+    )
+
+    render_actionable_investment_bottom_line(test_console, summary, storage=None)
+    output = buf.getvalue()
+
+    assert "ACTIONABLE INVESTMENT BOTTOM LINE" in output
+    assert "STOCKS & SECTORS TO INVEST IN (BENEFICIARIES)" in output
+    assert "Commercial Airlines" in output
+    assert "(Sector-wide play / Industry ETFs)" in output
+
 
 
 def test_cli_limit_per_source_and_max_age_options(tmp_path):

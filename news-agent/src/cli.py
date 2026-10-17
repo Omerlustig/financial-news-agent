@@ -78,8 +78,11 @@ def render_actionable_investment_bottom_line(
                 counterargs = analysis.causal_chain.counterarguments or ""
                 invalidation = analysis.causal_chain.invalidation_conditions or ""
 
+            stance_str = str(analysis.directional_stance).replace("DirectionalStance.", "")
+            stance_color = "green" if "BULLISH" in stance_str else ("red" if "BEARISH" in stance_str else "yellow")
+            stance_icon = "📈" if "BULLISH" in stance_str else ("📉" if "BEARISH" in stance_str else "⚖️")
+
             if not beneficiaries and analysis.affected_tickers:
-                stance_str = str(analysis.directional_stance)
                 if "BULLISH" in stance_str:
                     beneficiaries = analysis.affected_tickers
                 elif "BEARISH" in stance_str:
@@ -87,13 +90,36 @@ def render_actionable_investment_bottom_line(
                 else:
                     beneficiaries = analysis.affected_tickers
 
-            sectors_str = ", ".join(analysis.affected_sectors) if analysis.affected_sectors else "Broader Market / Macro"
-            beneficiaries_str = ", ".join(f"[bold green]{t}[/bold green]" for t in beneficiaries) if beneficiaries else "[italic dim]None direct[/italic dim]"
-            neg_str = ", ".join(f"[bold red]{t}[/bold red]" for t in negatively_exposed) if negatively_exposed else "[italic dim]None direct[/italic dim]"
+            sectors_list = analysis.affected_sectors or []
+            if analysis.causal_chain and analysis.causal_chain.affected_sectors:
+                sectors_list = analysis.causal_chain.affected_sectors
+            sectors_str = ", ".join(sectors_list) if sectors_list else "Broader Market / Macro"
 
-            stance_str = str(analysis.directional_stance).replace("DirectionalStance.", "")
-            stance_color = "green" if "BULLISH" in stance_str else ("red" if "BEARISH" in stance_str else "yellow")
-            stance_icon = "📈" if "BULLISH" in stance_str else ("📉" if "BEARISH" in stance_str else "⚖️")
+            # Formulate Actionable Investment Beneficiaries (Stocks and/or Sectors)
+            if beneficiaries:
+                stock_str = ", ".join(f"[bold green]{t}[/bold green]" for t in beneficiaries)
+                if sectors_list:
+                    beneficiaries_display = f"{stock_str} [dim]| Sector:[/] [bold green]{sectors_str}[/bold green]"
+                else:
+                    beneficiaries_display = stock_str
+            elif sectors_list and ("BULLISH" in stance_str or "VOLATILE" in stance_str):
+                beneficiaries_display = f"[bold green]{sectors_str}[/bold green] [dim](Sector-wide play / Industry ETFs)[/dim]"
+            elif sectors_list:
+                beneficiaries_display = f"[bold green]{sectors_str}[/bold green] [dim](Industry sector play)[/dim]"
+            else:
+                beneficiaries_display = "[italic dim]Broader Market / Macro[/italic dim]"
+
+            # Formulate Actionable Short / Avoid Exposures (Stocks and/or Sectors)
+            if negatively_exposed:
+                neg_stock_str = ", ".join(f"[bold red]{t}[/bold red]" for t in negatively_exposed)
+                if sectors_list:
+                    neg_display = f"{neg_stock_str} [dim]| Sector:[/] [bold red]{sectors_str}[/bold red]"
+                else:
+                    neg_display = neg_stock_str
+            elif sectors_list and "BEARISH" in stance_str:
+                neg_display = f"[bold red]{sectors_str}[/bold red] [dim](Sector-wide exposure / Headwinds)[/dim]"
+            else:
+                neg_display = "[italic dim]None direct / Negligible[/italic dim]"
 
             grade_val = analysis.impact_grade.value if hasattr(analysis.impact_grade, "value") else str(analysis.impact_grade)
             grade_color = "red bold" if grade_val == "CRITICAL" else ("yellow bold" if grade_val == "HIGH" else "cyan")
@@ -103,8 +129,10 @@ def render_actionable_investment_bottom_line(
                 f"[dim]Source: {article.source_name} | Published: {article.published_at or 'Breaking'} | Grade: [{grade_color}]{grade_val}[/{grade_color}] (Score: {analysis.confidence_score}/10)[/dim]\n\n"
                 f"{stance_icon} [bold]Directional Stance:[/] [{stance_color} bold]{stance_str}[/{stance_color} bold]  |  ⏱ [bold]Horizon:[/] {str(analysis.time_horizon or 'SHORT_TERM (1-7 days)').replace('TimeHorizon.', '')}\n"
                 f"🏭 [bold]Sectors in Play:[/] [cyan]{sectors_str}[/cyan]\n\n"
-                f"🟢 [bold green]STOCKS TO INVEST IN (BENEFICIARIES):[/bold green] {beneficiaries_str}\n"
-                f"🔴 [bold red]STOCKS TO AVOID / SHORT (EXPOSED):[/bold red] {neg_str}\n\n"
+                f"🟢 [bold green]STOCKS & SECTORS TO INVEST IN (BENEFICIARIES):[/bold green]\n"
+                f"   {beneficiaries_display}\n\n"
+                f"🔴 [bold red]STOCKS & SECTORS TO AVOID / SHORT (EXPOSED):[/bold red]\n"
+                f"   {neg_display}\n\n"
                 f"💡 [bold underline]Causal Transmission Thesis:[/bold underline]\n"
                 f"[dim white]{mechanism or analysis.rationale or article.summary}[/dim white]\n"
             )
@@ -150,8 +178,19 @@ def render_actionable_investment_bottom_line(
                         t_stance = r[4] or "BULLISH"
                         b_json = r[5]
                         b_tickers = json.loads(b_json) if b_json else []
-                        b_str = ", ".join(f"[bold green]{tk}[/bold green]" for tk in b_tickers) if b_tickers else "[dim]Sector-wide[/dim]"
-                        active_theses.append(f"• [bold white]{t_title}[/bold white] ([cyan]{t_grade}[/cyan]) -> Stance: [green]{t_stance}[/green] | Beneficiaries: {b_str}")
+                        s_json = r[7]
+                        s_list = json.loads(s_json) if s_json else []
+                        s_str = ", ".join(s_list) if s_list else ""
+
+                        if b_tickers and s_str:
+                            b_str = ", ".join(f"[bold green]{tk}[/bold green]" for tk in b_tickers) + f" [dim]({s_str})[/dim]"
+                        elif b_tickers:
+                            b_str = ", ".join(f"[bold green]{tk}[/bold green]" for tk in b_tickers)
+                        elif s_str:
+                            b_str = f"[bold green]{s_str}[/bold green] [dim](Sector-wide play)[/dim]"
+                        else:
+                            b_str = "[dim]Sector-wide / Macro[/dim]"
+                        active_theses.append(f"• [bold white]{t_title}[/bold white] ([cyan]{t_grade}[/cyan]) -> Stance: [green]{t_stance}[/green] | Opportunity: {b_str}")
             except Exception:
                 pass
 

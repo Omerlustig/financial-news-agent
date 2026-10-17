@@ -289,8 +289,20 @@ def format_telegram_message(
             beneficiaries = analysis.affected_tickers
             negatively_exposed = []
 
-    beneficiaries_str = ", ".join(beneficiaries) if beneficiaries else "None"
-    negatively_exposed_str = ", ".join(negatively_exposed) if negatively_exposed else "None"
+    if beneficiaries:
+        beneficiaries_str = ", ".join(beneficiaries)
+    elif sectors and sectors != ["None"] and ("BULL" in stance_val or "VOL" in stance_val):
+        beneficiaries_str = f"{sectors_str} (Sector-wide play)"
+    else:
+        beneficiaries_str = "None"
+
+    if negatively_exposed:
+        negatively_exposed_str = ", ".join(negatively_exposed)
+    elif sectors and sectors != ["None"] and "BEAR" in stance_val:
+        negatively_exposed_str = f"{sectors_str} (Sector-wide exposure)"
+    else:
+        negatively_exposed_str = "None"
+
     lines.append("")
     lines.append(f"🟢 <b>Beneficiaries:</b> {escape_html(beneficiaries_str)}")
     lines.append(f"🔴 <b>Negatively Exposed:</b> {escape_html(negatively_exposed_str)}")
@@ -300,6 +312,10 @@ def format_telegram_message(
     if not rec:
         if beneficiaries:
             rec = f"Monitor {', '.join(beneficiaries)} for catalyst follow-through over {horizon_val or 'short term'}; watch counterarguments."
+        elif sectors and sectors != ["None"] and "BULL" in stance_val:
+            rec = f"Evaluate overweight positioning on {sectors_str} sector/industry ETFs over {horizon_val or 'short term'}."
+        elif sectors and sectors != ["None"] and "BEAR" in stance_val:
+            rec = f"Exercise caution or evaluate hedge protection on {sectors_str} sector."
         elif negatively_exposed:
             rec = f"Exercise caution or evaluate hedge protection on {', '.join(negatively_exposed)}."
         else:
