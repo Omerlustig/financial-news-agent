@@ -1,11 +1,14 @@
 import json
 import logging
+import os
 import re
 import time
 from typing import Any, Dict, List, Optional, Union
 
 import litellm
 litellm.suppress_debug_info = True
+litellm.telemetry = False
+litellm.set_verbose = False
 litellm.drop_params = True
 
 from src.models import (
@@ -98,10 +101,17 @@ class MarketImpactAnalyzer:
         self.backoff_factor = backoff_factor
         self.fallback_on_error = fallback_on_error
         self.sentiment_engine = FinancialSentimentEngine()
+        self.quota_exhausted = False
 
 
     def analyze(self, article: RawArticle) -> MarketImpactAnalysis:
         """Analyzes an article using litellm with failover to fallback_model and exponential backoff retries."""
+        if self.quota_exhausted:
+            return self._build_fallback(
+                article,
+                "API request quota previously exhausted; evaluated with deterministic financial sentiment & regulatory engine.",
+            )
+
         system_prompt, user_prompt = build_analyst_prompt(article)
         messages = [
             {"role": "system", "content": system_prompt},
@@ -216,6 +226,19 @@ class MarketImpactAnalyzer:
                             next_model,
                         )
                         break
+
+                    is_quota_error = (
+                        "quota" in str(e).lower()
+                        or "resource_exhausted" in str(e).lower()
+                        or "quota exceeded" in str(e).lower()
+                    )
+                    if is_quota_error and not has_fallback_remaining:
+                        self.quota_exhausted = True
+                        logger.info(
+                            "Daily API quota reached for model '%s'. Seamlessly using high-precision financial rules engine for catalyst scoring.",
+                            target_model,
+                        )
+                        return self._build_fallback(article, f"Quota reached for {target_model}")
 
                     if is_auth_error:
                         if has_fallback_remaining:

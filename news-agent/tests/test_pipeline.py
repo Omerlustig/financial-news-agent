@@ -853,6 +853,134 @@ def test_cli_metrics_command(tmp_path):
     assert "gpt-4o-mini" in output
 
 
+def test_pipeline_recency_filtering(tmp_path):
+    """Verify that articles older than max_article_age_minutes are filtered out and marked as seen."""
+    from datetime import datetime, timezone, timedelta
+    from src.storage.sqlite import SQLiteStorage
+    from src.models import CausalChain
+
+    db_file = tmp_path / "recency_test.db"
+    storage = SQLiteStorage(str(db_file))
+
+    now = datetime.now(timezone.utc)
+    fresh_article = RawArticle(
+        title="Breaking Tech Surge",
+        url="https://example.com/fresh",
+        source_name="Reuters",
+        published_at=now - timedelta(minutes=5),
+        summary="Fresh breaking article",
+    )
+    stale_article = RawArticle(
+        title="Old Routine Report",
+        url="https://example.com/old",
+        source_name="CNBC",
+        published_at=now - timedelta(hours=3),
+        summary="3 hour old article",
+    )
+
+    mock_analyzer = MagicMock()
+    mock_analyzer.analyze.return_value = MarketImpactAnalysis(
+        summary="Nvidia GPU production ramps up.",
+        catalyst_thesis="Accelerating hyperscaler capex drives hardware revenue.",
+        is_market_moving=True,
+        confidence_score=9,
+        impact_grade=ImpactGrade.HIGH,
+        status=EventStatus.OPPORTUNITY_CANDIDATE,
+        causal_chain=CausalChain(
+            event_facts="Facts",
+            economic_mechanism="Mechanism",
+            affected_sectors=["Semiconductors"],
+            beneficiaries=["$NVDA"],
+            negatively_exposed=["$INTC"],
+        ),
+    )
+
+    pipeline = Pipeline(
+        storage=storage,
+        analyzer=mock_analyzer,
+        notifier=ConsoleNotifier(),
+        max_article_age_minutes=15,
+        alert_on_all=True,
+    )
+
+    summary = pipeline.process_articles([fresh_article, stale_article])
+
+    # Only fresh article should be analyzed
+    assert summary.fetched == 2
+    assert summary.analyzed == 1
+    assert len(summary.top_catalysts) == 1
+    assert summary.top_catalysts[0][0].title == "Breaking Tech Surge"
+
+    # Both articles must be recorded in storage so neither is re-analyzed
+    assert storage.is_article_seen(fresh_article.content_hash) is True
+    assert storage.is_article_seen(stale_article.content_hash) is True
+
+    # Immediate second run: zero unseen, zero analyzed
+    summary2 = pipeline.process_articles([fresh_article, stale_article])
+    assert summary2.new_unseen == 0
+    assert summary2.analyzed == 0
+    storage.close()
+
+
+def test_render_actionable_investment_bottom_line():
+    """Verify that render_actionable_investment_bottom_line formats stock/sector bottom line."""
+    from rich.console import Console
+    from io import StringIO
+    from src.cli import render_actionable_investment_bottom_line
+    from src.models import CausalChain, DirectionalStance
+
+    buf = StringIO()
+    test_console = Console(file=buf, force_terminal=False, color_system=None)
+
+    art = RawArticle(
+        title="Nvidia Revenue Surge",
+        url="https://example.com/nvda",
+        source_name="Reuters",
+        summary="AI demand spikes",
+    )
+    analysis = MarketImpactAnalysis(
+        summary="Hyperscaler capex expanded 40%",
+        catalyst_thesis="Accelerated datacenter capex expands shipments",
+        is_market_moving=True,
+        confidence_score=9,
+        impact_grade=ImpactGrade.CRITICAL,
+        status=EventStatus.OPPORTUNITY_CANDIDATE,
+        directional_stance=DirectionalStance.BULLISH,
+        affected_sectors=["Semiconductors", "AI Infrastructure"],
+        causal_chain=CausalChain(
+            event_facts="Hyperscaler demand expanded 40%",
+            economic_mechanism="Accelerated datacenter capex directly expands GPU shipments",
+            affected_sectors=["Semiconductors"],
+            beneficiaries=["$NVDA", "$TSM"],
+            negatively_exposed=["$INTC"],
+            invalidation_conditions="Capex reductions by top 4 hyperscalers",
+        ),
+    )
+
+    summary = CycleSummary(
+        fetched=1,
+        new_unseen=1,
+        analyzed=1,
+        alerted=1,
+        errors=0,
+        top_catalysts=[(art, analysis)],
+    )
+
+    render_actionable_investment_bottom_line(test_console, summary, storage=None)
+    output = buf.getvalue()
+
+    assert "ACTIONABLE INVESTMENT BOTTOM LINE" in output
+    assert "STOCKS TO INVEST IN (BENEFICIARIES)" in output
+    assert "$NVDA" in output
+    assert "$TSM" in output
+    assert "$INTC" in output
+    assert "Semiconductors" in output
+    assert "Directional Stance: BULLISH" in output
+    assert "Causal Transmission Thesis" in output
+    assert "Thesis Invalidation Condition" in output
+
+
+
 
 
 

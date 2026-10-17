@@ -29,6 +29,7 @@ class SourcesContainer(BaseModel):
 class AgentSettings(BaseModel):
     polling_interval_minutes: int = Field(default=15, description="Minutes between poll cycles in daemon mode.")
     batch_size_per_source: int = Field(default=15, description="Maximum articles fetched per feed per cycle.")
+    max_article_age_minutes: Optional[int] = Field(default=15, description="Maximum age of articles in minutes to process (None or 0 to disable).")
     database_path: str = Field(default="data/agent.db", description="Path to SQLite database.")
     enable_etag_cache: bool = Field(default=True, description="Enable HTTP conditional GET caching for feeds.")
     fetch_max_retries: int = Field(default=3, description="Maximum retry attempts on feed network failures.")

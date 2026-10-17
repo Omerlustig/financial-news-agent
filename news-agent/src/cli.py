@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import signal
@@ -6,18 +7,21 @@ import threading
 import time
 import warnings
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 warnings.filterwarnings("ignore", message=".*urllib3.*or chardet.*doesn't match a supported version.*")
 warnings.filterwarnings("ignore", message=".*urllib3.*")
 
 import litellm
 litellm.suppress_debug_info = True
+litellm.telemetry = False
+litellm.set_verbose = False
 litellm.drop_params = True
 
 import requests
 import typer
 from rich.console import Console
+from rich.panel import Panel
 from rich.table import Table
 
 # Ensure news-agent root is in sys.path
@@ -50,11 +54,132 @@ app = typer.Typer(
 )
 
 
+def render_actionable_investment_bottom_line(
+    console: Console,
+    summary: Any,
+    storage: Optional[SQLiteStorage] = None,
+) -> None:
+    """Renders the institutional investment bottom line detailing recommended stocks and sectors."""
+    candidates = getattr(summary, "top_catalysts", []) or []
+
+    console.print("\n")
+    if candidates:
+        console.rule("[bold green]🎯 ACTIONABLE INVESTMENT BOTTOM LINE (STOCKS & SECTORS)[/bold green]")
+        for article, analysis in candidates[:5]:
+            beneficiaries = []
+            negatively_exposed = []
+            mechanism = ""
+            counterargs = ""
+            invalidation = ""
+            if analysis.causal_chain:
+                beneficiaries = analysis.causal_chain.beneficiaries or []
+                negatively_exposed = analysis.causal_chain.negatively_exposed or []
+                mechanism = analysis.causal_chain.economic_mechanism or ""
+                counterargs = analysis.causal_chain.counterarguments or ""
+                invalidation = analysis.causal_chain.invalidation_conditions or ""
+
+            if not beneficiaries and analysis.affected_tickers:
+                stance_str = str(analysis.directional_stance)
+                if "BULLISH" in stance_str:
+                    beneficiaries = analysis.affected_tickers
+                elif "BEARISH" in stance_str:
+                    negatively_exposed = analysis.affected_tickers
+                else:
+                    beneficiaries = analysis.affected_tickers
+
+            sectors_str = ", ".join(analysis.affected_sectors) if analysis.affected_sectors else "Broader Market / Macro"
+            beneficiaries_str = ", ".join(f"[bold green]{t}[/bold green]" for t in beneficiaries) if beneficiaries else "[italic dim]None direct[/italic dim]"
+            neg_str = ", ".join(f"[bold red]{t}[/bold red]" for t in negatively_exposed) if negatively_exposed else "[italic dim]None direct[/italic dim]"
+
+            stance_str = str(analysis.directional_stance).replace("DirectionalStance.", "")
+            stance_color = "green" if "BULLISH" in stance_str else ("red" if "BEARISH" in stance_str else "yellow")
+            stance_icon = "📈" if "BULLISH" in stance_str else ("📉" if "BEARISH" in stance_str else "⚖️")
+
+            grade_val = analysis.impact_grade.value if hasattr(analysis.impact_grade, "value") else str(analysis.impact_grade)
+            grade_color = "red bold" if grade_val == "CRITICAL" else ("yellow bold" if grade_val == "HIGH" else "cyan")
+
+            card_body = (
+                f"[bold white]{article.title}[/bold white]\n"
+                f"[dim]Source: {article.source_name} | Published: {article.published_at or 'Breaking'} | Grade: [{grade_color}]{grade_val}[/{grade_color}] (Score: {analysis.confidence_score}/10)[/dim]\n\n"
+                f"{stance_icon} [bold]Directional Stance:[/] [{stance_color} bold]{stance_str}[/{stance_color} bold]  |  ⏱ [bold]Horizon:[/] {str(analysis.time_horizon or 'SHORT_TERM (1-7 days)').replace('TimeHorizon.', '')}\n"
+                f"🏭 [bold]Sectors in Play:[/] [cyan]{sectors_str}[/cyan]\n\n"
+                f"🟢 [bold green]STOCKS TO INVEST IN (BENEFICIARIES):[/bold green] {beneficiaries_str}\n"
+                f"🔴 [bold red]STOCKS TO AVOID / SHORT (EXPOSED):[/bold red] {neg_str}\n\n"
+                f"💡 [bold underline]Causal Transmission Thesis:[/bold underline]\n"
+                f"[dim white]{mechanism or analysis.rationale or article.summary}[/dim white]\n"
+            )
+            if invalidation:
+                card_body += f"\n🛑 [bold]Thesis Invalidation Condition:[/] [dim yellow]{invalidation}[/dim yellow]\n"
+            if counterargs:
+                card_body += f"⚖️ [bold]Risk Headwinds:[/] [dim]{counterargs}[/dim]\n"
+
+            card_body += (
+                f"\n🔗 [blue underline]{article.url}[/blue underline]\n"
+                f"[dim italic]⚠️ News-derived hypothesis. Market pricing, valuation, and entry points were not checked.[/dim italic]"
+            )
+
+            console.print(
+                Panel(
+                    card_body,
+                    title=f"[bold green]🚀 ACTIONABLE CATALYST: {article.title[:60]}[/bold green]",
+                    border_style="green",
+                    expand=True,
+                )
+            )
+    else:
+        # Check SQLite for active catalysts from the last 24h
+        console.rule("[bold yellow]ℹ️ MARKET INTELLIGENCE BOTTOM LINE[/bold yellow]")
+        active_theses = []
+        if storage is not None:
+            try:
+                with storage._lock:
+                    cursor = storage._conn.cursor()
+                    cursor.execute(
+                        """
+                        SELECT title, source_name, impact_grade, confidence_score, directional_stance, beneficiaries, negatively_exposed, sectors
+                        FROM articles
+                        WHERE alerted = 1 OR status = 'OPPORTUNITY_CANDIDATE' OR confidence_score >= 7
+                        ORDER BY created_at DESC
+                        LIMIT 3
+                        """
+                    )
+                    rows = cursor.fetchall()
+                    for r in rows:
+                        t_title = r[0]
+                        t_grade = r[2] or "HIGH"
+                        t_stance = r[4] or "BULLISH"
+                        b_json = r[5]
+                        b_tickers = json.loads(b_json) if b_json else []
+                        b_str = ", ".join(f"[bold green]{tk}[/bold green]" for tk in b_tickers) if b_tickers else "[dim]Sector-wide[/dim]"
+                        active_theses.append(f"• [bold white]{t_title}[/bold white] ([cyan]{t_grade}[/cyan]) -> Stance: [green]{t_stance}[/green] | Beneficiaries: {b_str}")
+            except Exception:
+                pass
+
+        if active_theses:
+            theses_block = "\n".join(active_theses)
+            msg = (
+                f"[bold white]No new anomalous catalyst broke in the last 15 minutes.[/bold white]\n\n"
+                f"[bold underline]Active High-Conviction Market Theses (Recent 24h):[/bold underline]\n"
+                f"{theses_block}\n\n"
+                f"• Tracked tickers: [bold cyan]python -m src.main scanner --hours 24[/bold cyan]\n"
+                f"• Sector digest: [bold cyan]python -m src.main digest --hours 24[/bold cyan]"
+            )
+        else:
+            msg = (
+                "[bold white]No market-moving anomalies exceeded the high-confidence threshold in the last 15 minutes.[/bold white]\n\n"
+                "• All recent headlines represent routine corporate releases, minor syndicated stories, or standard market noise.\n"
+                "• Zero false-positive alerts dispatched.\n"
+                "• The agent continues monitoring feeds in the background (or run with [bold cyan]--alert-on-all[/bold cyan] to inspect all routine items)."
+            )
+        console.print(Panel(msg, title="[yellow]Market Bottom Line[/yellow]", border_style="yellow"))
+
+
 @app.command("run-once")
 def run_once(
     config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to settings.yaml"),
     sources: Optional[str] = typer.Option(None, "--sources", "-s", help="Path to sources.yaml"),
     alert_on_all: bool = typer.Option(False, "--alert-on-all", help="Bypass impact and confidence thresholds for testing"),
+    max_age_minutes: Optional[int] = typer.Option(None, "--max-age-minutes", "-m", help="Filter articles older than N minutes (overrides settings.yaml)"),
 ) -> None:
     """Execute a single news scan, analysis, alerting, and persistence cycle."""
     console.print("[bold cyan]Executing single scan cycle...[/bold cyan]")
@@ -65,6 +190,7 @@ def run_once(
         settings=settings,
         sources=sources_list,
         alert_on_all=alert_on_all or settings.filter.alert_on_all,
+        max_article_age_minutes=max_age_minutes,
     )
 
     try:
@@ -80,6 +206,7 @@ def run_once(
         table.add_row("Errors Encountered", str(summary.errors))
 
         console.print(table)
+        render_actionable_investment_bottom_line(console, summary, pipeline.storage)
     finally:
         pipeline.close()
 
@@ -91,6 +218,7 @@ def run(
     config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to settings.yaml"),
     sources: Optional[str] = typer.Option(None, "--sources", "-s", help="Path to sources.yaml"),
     alert_on_all: bool = typer.Option(False, "--alert-on-all", help="Bypass impact and confidence thresholds for testing"),
+    max_age_minutes: Optional[int] = typer.Option(None, "--max-age-minutes", "-m", help="Filter articles older than N minutes (overrides settings.yaml)"),
 ) -> None:
     """Run news monitoring pipeline (daemon mode by default, or single-run if --no-daemon)."""
     settings = load_settings(config)
@@ -104,6 +232,7 @@ def run(
         settings=settings,
         sources=sources_list,
         alert_on_all=alert_on_all or settings.filter.alert_on_all,
+        max_article_age_minutes=max_age_minutes,
     )
 
     if not daemon:
@@ -115,6 +244,7 @@ def run(
                 f"{summary.new_unseen} unseen, {summary.analyzed} analyzed, "
                 f"{summary.alerted} alerted, {summary.errors} errors."
             )
+            render_actionable_investment_bottom_line(console, summary, pipeline.storage)
             return
         finally:
             pipeline.close()
@@ -143,6 +273,7 @@ def run(
                     f"{summary.new_unseen} unseen, {summary.analyzed} analyzed, "
                     f"{summary.alerted} alerted, {summary.errors} errors."
                 )
+                render_actionable_investment_bottom_line(console, summary, pipeline.storage)
             except Exception as exc:
                 logger.error("Unexpected error during pipeline execution: %s", exc, exc_info=True)
                 console.print(f"[bold red]Pipeline cycle error:[/] {exc}")

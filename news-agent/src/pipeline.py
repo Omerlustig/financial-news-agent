@@ -1,6 +1,7 @@
 import logging
-from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Union
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from src.models import RawArticle, MarketImpactAnalysis, ImpactGrade, EventStatus
 from src.config import Settings, SourceConfig, load_settings, load_sources
@@ -34,6 +35,7 @@ class CycleSummary:
     analyzed: int = 0
     alerted: int = 0
     errors: int = 0
+    top_catalysts: List[Any] = field(default_factory=list)
 
     @property
     def seen(self) -> int:
@@ -80,6 +82,7 @@ class Pipeline:
         alert_on_all: Optional[bool] = None,
         settings: Optional[Settings] = None,
         fetch_timeout: float = 15.0,
+        max_article_age_minutes: Optional[int] = None,
     ) -> None:
         self.settings = settings
         self.fetch_timeout = fetch_timeout
@@ -88,6 +91,13 @@ class Pipeline:
         self.surge_engine = surge_engine if surge_engine is not None else SurgeVelocityEngine()
         self.trend_engine = trend_engine if trend_engine is not None else TrendEngine()
 
+        # Recency filter resolution (default to 15 minutes unless overridden or disabled)
+        if max_article_age_minutes is not None:
+            self.max_article_age_minutes = max_article_age_minutes
+        elif settings is not None and getattr(settings, "agent", None) is not None:
+            self.max_article_age_minutes = getattr(settings.agent, "max_article_age_minutes", 15)
+        else:
+            self.max_article_age_minutes = 15
 
         # Threshold resolution: min_score takes precedence over min_confidence_score
         if min_score is not None:
@@ -251,18 +261,55 @@ class Pipeline:
         if not articles:
             return CycleSummary(fetched=0, new_unseen=0, analyzed=0, alerted=0, errors=0)
 
-        # 1. Deduplication via SQLite
+        # 1. Recency Filtering: discard articles older than max_article_age_minutes
+        if self.max_article_age_minutes and self.max_article_age_minutes > 0:
+            now_utc = datetime.now(timezone.utc)
+            fresh_articles: List[RawArticle] = []
+            stale_articles: List[RawArticle] = []
+            for art in articles:
+                if art.published_at is not None:
+                    pub = (
+                        art.published_at
+                        if art.published_at.tzinfo is not None
+                        else art.published_at.replace(tzinfo=timezone.utc)
+                    )
+                    age_min = (now_utc - pub).total_seconds() / 60.0
+                    if age_min > self.max_article_age_minutes:
+                        stale_articles.append(art)
+                        continue
+                fresh_articles.append(art)
+
+            # Persist stale articles into SQLite so subsequent cycles skip them immediately
+            if stale_articles and self.storage is not None:
+                for stale in stale_articles:
+                    try:
+                        if not self.storage.is_article_seen(stale.content_hash):
+                            self.storage.record_article(stale, alerted=False)
+                    except Exception:
+                        pass
+
+            if stale_articles:
+                logger.info(
+                    "Filtered %d stale articles older than %d minutes; %d fresh articles remain.",
+                    len(stale_articles),
+                    self.max_article_age_minutes,
+                    len(fresh_articles),
+                )
+            articles = fresh_articles
+
+        # 2. Deduplication via SQLite
         unseen_articles = self.storage.filter_unseen(articles)
         new_unseen_count = len(unseen_articles)
 
         analyzed_count = 0
         alerted_count = 0
         errors_count = 0
+        top_catalysts: List[Tuple[RawArticle, MarketImpactAnalysis]] = []
 
-        # 2. Multi-Source Event Clustering
+        # 3. Multi-Source Event Clustering
         clusters = self.corroborator.cluster_articles(unseen_articles)
 
-        # 3. Iterate through candidate event clusters
+        # 4. Iterate through candidate event clusters
         for cluster in clusters:
             canonical = cluster.canonical_article
             try:
@@ -343,6 +390,18 @@ class Pipeline:
                     analysis.confidence_score,
                 )
 
+            # Record candidates for the executive investment bottom line
+            if (
+                alert_delivered
+                or analysis.status == EventStatus.OPPORTUNITY_CANDIDATE
+                or analysis.confidence_score >= 6
+                or (
+                    analysis.causal_chain is not None
+                    and (analysis.causal_chain.beneficiaries or analysis.causal_chain.negatively_exposed)
+                )
+            ):
+                top_catalysts.append((canonical, analysis))
+
             # Storage persistence:
             # 1. Record canonical article with actual alerted status
             try:
@@ -383,6 +442,7 @@ class Pipeline:
             analyzed=analyzed_count,
             alerted=alerted_count,
             errors=errors_count,
+            top_catalysts=top_catalysts,
         )
 
     def run_cycle(self) -> CycleSummary:
