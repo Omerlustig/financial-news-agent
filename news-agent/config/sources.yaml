@@ -1,0 +1,25 @@
+sources:
+  - name: "Reuters Business"
+    type: "rss"
+    url: "https://feeds.feedburner.com/reuters/businessNews"
+    enabled: true
+
+  - name: "CNBC Top News"
+    type: "rss"
+    url: "https://www.cnbc.com/id/100003114/device/rss/rss.html"
+    enabled: true
+
+  - name: "Yahoo Finance"
+    type: "rss"
+    url: "https://finance.yahoo.com/news/rssindex"
+    enabled: true
+
+  - name: "MarketWatch Top Stories"
+    type: "rss"
+    url: "https://feeds.content.dowjones.io/public/rss/mw_topstories"
+    enabled: true
+
+  - name: "SEC Press Releases"
+    type: "rss"
+    url: "https://www.sec.gov/news/pressreleases.rss"
+    enabled: true

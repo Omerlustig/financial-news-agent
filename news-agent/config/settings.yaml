@@ -1,0 +1,18 @@
+agent:
+  polling_interval_minutes: 15
+  batch_size_per_source: 15
+  database_path: "data/agent.db"
+
+filter:
+  min_confidence_score: 6
+  min_impact_grade: "HIGH"
+  alert_on_all: false
+
+llm:
+  model: "gemini/gemini-1.5-flash"
+  temperature: 0.1
+  max_retries: 3
+
+telegram:
+  bot_token: "${TELEGRAM_BOT_TOKEN}"
+  chat_id: "${TELEGRAM_CHAT_ID}"
