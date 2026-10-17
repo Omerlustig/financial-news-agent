@@ -46,9 +46,12 @@ flowchart TD
 
 ### Core Architecture Highlights
 - **Decoupled Modular Architecture**: Clean separation between ingestion, LLM analysis, deduplication persistence, and notification layers.
-- **Multi-LLM Support**: Powered by `litellm`—seamlessly switch between Google Gemini (`gemini/gemini-1.5-flash`, `gemini-1.5-pro`), OpenAI (`gpt-4o-mini`, `gpt-4o`), Anthropic Claude (`claude-3-5-sonnet`), Groq, or local models.
-- **Robust SQLite Storage**: Thread-safe connection pooling, Write-Ahead Logging (`WAL`), and automatic transaction rollbacks ensure zero lost data or lock contention.
-- **Reliable Telegram Delivery**: Robust HTML escaping, automatic exponential backoff retry on HTTP 429 rate limits, and 4096-character message length safeguarding.
+- **Resilient Network Ingestion & Auto-Retries**: Configurable automatic retries with exponential backoff on network timeouts, DNS drops, or HTTP 5xx errors, plus HTTP 304 conditional GET (`ETag`/`Last-Modified`) feed caching to skip unchanged feeds.
+- **Zero Duplicate Processing (Multi-Tier Deduplication)**: Automatic URL canonicalization (stripping tracking parameters like `utm_*`, `ref`, and `fbclid`), deterministic SHA-256 content hashing (`url + title`), and SQLite WAL persistence of both alerted and non-alerted articles guarantee an article is never re-analyzed or re-alerted.
+- **Multi-LLM Support & Auto-Failover**: Powered by `litellm`—primary model delegation (`gemini/gemini-1.5-flash`) with automatic failover to secondary fallback models (e.g. `gpt-4o-mini`) on provider rate limits or downtime.
+- **Focused, Actionable Alerts with Recommendations**: Structured Telegram alerts delivering score, impact grade, directional stance, time horizon, causal transmission mechanism, beneficiaries vs. negatively exposed tickers, and a concise actionable recommendation.
+- **Robust SQLite Storage**: Thread-safe connection pooling, Write-Ahead Logging (`WAL`), and automatic schema migration.
+- **Reliable Telegram Delivery**: Robust HTML escaping, automatic exponential backoff retry on HTTP 429 rate limits, and 4000-character message boundary safeguarding.
 
 ---
 
@@ -300,19 +303,30 @@ python -m src.main test-telegram --message "Market News Agent connected and veri
 ```
 
 Sample Alert Preview:
-```text
-🚨 CRITICAL MARKET IMPACT | Score: 9/10
+```html
+🚨 [OPPORTUNITY CANDIDATE | Score: 9/10 | CRITICAL]
+📈 Stance: BULLISH | ⏱ Horizon: SHORT_TERM (1-7 days)
+🏭 Sectors: Semiconductors, AI Hardware
+Headline: Nvidia Announces Record Blackwell Shipments and Major Hyperscaler Deals
+Publisher: Reuters | Published: 2026-10-17 19:30 UTC
 
-📌 Headline: Federal Reserve Announces Emergency 50bps Rate Cut
-🏢 Source: Reuters Business | 2026-10-17 14:30 UTC
+Executive Summary:
+Nvidia announced record Blackwell shipments and billions in multi-year commitments with global cloud providers.
 
-🎯 Affected Tickers: $SPY, $QQQ, $TLT, $JPM
-🌐 Sectors: Financials, Technology, Macro
+Causal Mechanism:
+Surge in hyperscaler data center capex directly expands operating margins and accelerates booked backlog recognition.
 
-💡 Catalyst Thesis:
-Unscheduled emergency rate reduction driven by sudden liquidity stress across interbank lending facilities. Signals aggressive dovish pivot.
+🟢 Beneficiaries: $NVDA, $TSM, $AVGO
+🔴 Negatively Exposed: $INTC
 
-🔗 Read Article: https://reuters.com/business/...
+💡 Recommendation: Prioritize long exposure on $NVDA/$TSM on dips; hedge downside risk via $SMH puts; avoid $INTC until next quarter.
+
+⚖️ Counterarguments: Foundry packaging bottlenecks; risk of tighter trade export licensing.
+🛑 Invalidation Condition: Hyperscaler capex guidance reductions in next 10-Q filings.
+
+🔗 https://reuters.com/business/nvidia-blackwell-record-shipments
+
+⚠️ News-derived hypothesis. Market pricing, valuation, and entry points were not checked.
 ```
 
 ---
@@ -325,7 +339,7 @@ The container runs as an unprivileged user (`appuser`) with a dedicated volume m
 
 1. **Clone the repository on your server:**
    ```bash
-   git clone https://github.com/omer/financial-news-agent.git /opt/financial-news-agent
+   git clone https://github.com/Omerlustig/financial-news-agent.git /opt/financial-news-agent
    cd /opt/financial-news-agent/news-agent
    ```
 

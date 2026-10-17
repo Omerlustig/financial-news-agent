@@ -3,6 +3,8 @@ agent:
   batch_size_per_source: 15
   database_path: "data/agent.db"
   enable_etag_cache: true # Enable HTTP conditional GET (ETag/Last-Modified) feed caching
+  fetch_max_retries: 3 # Retry count on feed network/connection drop or HTTP 5xx
+  fetch_retry_backoff: 1.0 # Backoff factor in seconds for feed fetch retries
 
 filter:
   min_confidence_score: 6

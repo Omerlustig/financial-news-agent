@@ -463,6 +463,9 @@ def test_telegram_message_formatting_institutional_causal_chain():
     assert "🟢 <b>Beneficiaries:</b> $NVDA, $AVGO" in msg
     assert "🔴 <b>Negatively Exposed:</b> $INTC" in msg
 
+    # Recommendation
+    assert "💡 <b>Recommendation:</b>" in msg
+
     # 8. Counterarguments & Invalidation
     assert "⚖️ <b>Counterarguments:</b> Legislative challenge in Congress could delay implementation window by 60 days." in msg
     assert "🛑 <b>Invalidation Condition:</b> Federal register rule revocation or injunction issued by trade court." in msg
@@ -472,4 +475,27 @@ def test_telegram_message_formatting_institutional_causal_chain():
 
     # 10. Mandatory Disclaimer at footer
     assert "<i>⚠️ News-derived hypothesis. Market pricing, valuation, and entry points were not checked.</i>" in msg
+
+
+def test_telegram_message_formatting_with_explicit_recommendation():
+    article = RawArticle(
+        title="Check Point Software Acquires Cyber Leader",
+        url="https://globes.co.il/news/chkp-deal",
+        source_name="Globes",
+    )
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=9,
+        impact_grade=ImpactGrade.CRITICAL,
+        affected_tickers=["$CHKP"],
+        affected_sectors=["Cybersecurity"],
+        summary="Check Point completed accretive acquisition.",
+        catalyst_thesis="Expanding ARR and AI cyber defense margins.",
+        status=EventStatus.OPPORTUNITY_CANDIDATE,
+        directional_stance=DirectionalStance.BULLISH,
+        time_horizon="MEDIUM_TERM",
+        recommendation="Accumulate $CHKP on opening dip; set trailing stops at 50-day moving average.",
+    )
+    msg = format_telegram_message(article, analysis)
+    assert "💡 <b>Recommendation:</b> Accumulate $CHKP on opening dip; set trailing stops at 50-day moving average." in msg
 

@@ -31,6 +31,8 @@ class AgentSettings(BaseModel):
     batch_size_per_source: int = Field(default=15, description="Maximum articles fetched per feed per cycle.")
     database_path: str = Field(default="data/agent.db", description="Path to SQLite database.")
     enable_etag_cache: bool = Field(default=True, description="Enable HTTP conditional GET caching for feeds.")
+    fetch_max_retries: int = Field(default=3, description="Maximum retry attempts on feed network failures.")
+    fetch_retry_backoff: float = Field(default=1.0, description="Exponential backoff factor in seconds for feed fetch retries.")
 
 
 class FilterSettings(BaseModel):

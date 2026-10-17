@@ -135,6 +135,7 @@ Respond with pure JSON conforming strictly to this schema:
     "has_direct_exposure": boolean,
     "passes_all_gates": boolean
   },
+  "recommendation": "Concise 1-sentence actionable analyst recommendation or monitoring posture (e.g. 'Prioritize long exposure on $NVDA/$TSM on dips; hedge downside risk via $SMH puts; avoid $INTC until next quarter').",
   "disclaimer": "⚠️ News-derived hypothesis. Market pricing, valuation, and entry points were not checked."
 }
 """

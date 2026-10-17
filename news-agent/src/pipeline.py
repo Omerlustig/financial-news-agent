@@ -352,12 +352,24 @@ class Pipeline:
                     if self.settings is not None and getattr(self.settings, "agent", None) is not None
                     else True
                 )
+                max_retries = (
+                    getattr(self.settings.agent, "fetch_max_retries", 3)
+                    if self.settings is not None and getattr(self.settings, "agent", None) is not None
+                    else 3
+                )
+                retry_backoff = (
+                    getattr(self.settings.agent, "fetch_retry_backoff", 1.0)
+                    if self.settings is not None and getattr(self.settings, "agent", None) is not None
+                    else 1.0
+                )
                 articles = fetch_all_sources(
                     self.sources,
                     timeout=self.fetch_timeout,
                     max_items_per_source=batch_size,
                     storage=self.storage,
                     enable_etag_cache=enable_etag,
+                    max_retries=max_retries,
+                    retry_backoff=retry_backoff,
                 )
         except Exception as exc:
             logger.error("Critical error during source ingestion: %s", exc, exc_info=True)

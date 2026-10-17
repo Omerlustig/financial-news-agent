@@ -198,6 +198,18 @@ def format_telegram_message(
     lines.append(f"🟢 <b>Beneficiaries:</b> {escape_html(beneficiaries_str)}")
     lines.append(f"🔴 <b>Negatively Exposed:</b> {escape_html(negatively_exposed_str)}")
 
+    # Recommendation / Actionable Takeaway
+    rec = getattr(analysis, "recommendation", None)
+    if not rec:
+        if beneficiaries:
+            rec = f"Monitor {', '.join(beneficiaries)} for catalyst follow-through over {horizon_val or 'short term'}; watch counterarguments."
+        elif negatively_exposed:
+            rec = f"Exercise caution or evaluate hedge protection on {', '.join(negatively_exposed)}."
+        else:
+            rec = "Track subsequent corporate disclosures and primary filings for tradeable volume confirmation."
+    lines.append("")
+    lines.append(f"💡 <b>Recommendation:</b> {escape_html(rec)}")
+
     # Counterarguments & Invalidation
     if analysis.causal_chain and analysis.causal_chain.counterarguments:
         counterarguments = analysis.causal_chain.counterarguments

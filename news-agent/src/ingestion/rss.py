@@ -5,6 +5,7 @@ import html
 import logging
 import re
 import socket
+import time
 from typing import Any, List, Optional
 import feedparser
 import requests
@@ -121,6 +122,8 @@ class RSSFetcher(BaseFetcher):
         user_agent: str = USER_AGENT,
         storage: Optional[BaseStorage] = None,
         enable_etag_cache: bool = True,
+        max_retries: int = 3,
+        retry_backoff: float = 1.0,
     ) -> None:
         super().__init__(source_config)
         self.user_agent = user_agent
@@ -128,6 +131,8 @@ class RSSFetcher(BaseFetcher):
         self.max_items = max_items
         self.storage = storage
         self.enable_etag_cache = enable_etag_cache
+        self.max_retries = max(1, max_retries)
+        self.retry_backoff = max(0.0, retry_backoff)
 
     def fetch(self) -> List[RawArticle]:
         """Fetch and parse articles from the configured RSS/Atom feed.
@@ -146,64 +151,100 @@ class RSSFetcher(BaseFetcher):
             and isinstance(url, str)
             and url.startswith(("http://", "https://"))
         ):
-            try:
-                cached_etag, cached_last_modified = self.storage.get_feed_cache(url)
-                headers = {"User-Agent": self.user_agent}
-                if cached_etag:
-                    headers["If-None-Match"] = cached_etag
-                if cached_last_modified:
-                    headers["If-Modified-Since"] = cached_last_modified
+            cached_etag, cached_last_modified = self.storage.get_feed_cache(url)
+            headers = {"User-Agent": self.user_agent}
+            if cached_etag:
+                headers["If-None-Match"] = cached_etag
+            if cached_last_modified:
+                headers["If-Modified-Since"] = cached_last_modified
 
-                response = requests.get(url, headers=headers, timeout=self.timeout)
+            for attempt in range(1, self.max_retries + 1):
+                try:
+                    response = requests.get(url, headers=headers, timeout=self.timeout)
 
-                if response.status_code == 304:
-                    logger.debug(
-                        "Feed '%s' (%s) unchanged (HTTP 304 Not Modified); skipping parse.",
-                        self.source_config.name,
-                        url,
-                    )
-                    return []
-                elif response.status_code == 200:
-                    new_etag = response.headers.get("ETag")
-                    new_last_modified = response.headers.get("Last-Modified")
-                    parsed = feedparser.parse(response.content)
-                    if self.storage is not None:
-                        self.storage.set_feed_cache(url, new_etag, new_last_modified)
-                else:
-                    logger.warning(
-                        "HTTP error %d fetching RSS feed '%s' (%s)",
-                        response.status_code,
-                        self.source_config.name,
-                        url,
-                    )
-                    return []
-            except Exception as exc:
-                logger.warning(
-                    "Network or parser error fetching RSS feed '%s' (%s): %s",
-                    self.source_config.name,
-                    url,
-                    exc,
-                )
-                return []
+                    if response.status_code == 304:
+                        logger.debug(
+                            "Feed '%s' (%s) unchanged (HTTP 304 Not Modified); skipping parse.",
+                            self.source_config.name,
+                            url,
+                        )
+                        return []
+                    elif response.status_code == 200:
+                        new_etag = response.headers.get("ETag")
+                        new_last_modified = response.headers.get("Last-Modified")
+                        parsed = feedparser.parse(response.content)
+                        if self.storage is not None:
+                            self.storage.set_feed_cache(url, new_etag, new_last_modified)
+                        break
+                    elif response.status_code in (500, 502, 503, 504, 429) and attempt < self.max_retries:
+                        sleep_time = self.retry_backoff * (2 ** (attempt - 1))
+                        logger.warning(
+                            "Transient HTTP %d from '%s' (%s). Retrying %d/%d after %.1fs...",
+                            response.status_code,
+                            self.source_config.name,
+                            url,
+                            attempt + 1,
+                            self.max_retries,
+                            sleep_time,
+                        )
+                        time.sleep(sleep_time)
+                        continue
+                    else:
+                        logger.warning(
+                            "HTTP error %d fetching RSS feed '%s' (%s)",
+                            response.status_code,
+                            self.source_config.name,
+                            url,
+                        )
+                        return []
+                except (requests.exceptions.RequestException, socket.timeout) as exc:
+                    if attempt < self.max_retries:
+                        sleep_time = self.retry_backoff * (2 ** (attempt - 1))
+                        logger.warning(
+                            "Network error fetching RSS feed '%s' (%s): %s. Retrying %d/%d after %.1fs...",
+                            self.source_config.name,
+                            url,
+                            exc,
+                            attempt + 1,
+                            self.max_retries,
+                            sleep_time,
+                        )
+                        time.sleep(sleep_time)
+                    else:
+                        logger.warning(
+                            "Network or parser error fetching RSS feed '%s' (%s) after %d retries: %s",
+                            self.source_config.name,
+                            url,
+                            self.max_retries,
+                            exc,
+                        )
+                        return []
         else:
             old_timeout = socket.getdefaulttimeout()
-            try:
-                socket.setdefaulttimeout(self.timeout)
-                parsed = feedparser.parse(
-                    url,
-                    agent=self.user_agent,
-                    request_headers={"User-Agent": self.user_agent},
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Network or parser error fetching RSS feed '%s' (%s): %s",
-                    self.source_config.name,
-                    url,
-                    exc,
-                )
-                return []
-            finally:
-                socket.setdefaulttimeout(old_timeout)
+            for attempt in range(1, self.max_retries + 1):
+                try:
+                    socket.setdefaulttimeout(self.timeout)
+                    parsed = feedparser.parse(
+                        url,
+                        agent=self.user_agent,
+                        request_headers={"User-Agent": self.user_agent},
+                    )
+                    break
+                except Exception as exc:
+                    if attempt < self.max_retries:
+                        sleep_time = self.retry_backoff * (2 ** (attempt - 1))
+                        time.sleep(sleep_time)
+                    else:
+                        logger.warning(
+                            "Network or parser error fetching RSS feed '%s' (%s) after %d retries: %s",
+                            self.source_config.name,
+                            url,
+                            self.max_retries,
+                            exc,
+                        )
+                        return []
+                finally:
+                    socket.setdefaulttimeout(old_timeout)
 
         if parsed is None:
             logger.warning("Feedparser returned None for '%s' (%s)", self.source_config.name, url)
@@ -369,6 +410,8 @@ def fetch_all_sources(
     max_items_per_source: Optional[int] = None,
     storage: Optional[BaseStorage] = None,
     enable_etag_cache: bool = True,
+    max_retries: int = 3,
+    retry_backoff: float = 1.0,
 ) -> List[RawArticle]:
     """Fetch articles from all enabled sources with feed-level error containment.
 
@@ -382,6 +425,8 @@ def fetch_all_sources(
         max_items_per_source: Optional maximum number of recent articles to ingest per feed.
         storage: Optional BaseStorage instance for conditional ETag and Last-Modified caching.
         enable_etag_cache: Whether to use HTTP conditional GET headers.
+        max_retries: Maximum retry attempts on network failures or transient 5xx HTTP errors.
+        retry_backoff: Backoff multiplier in seconds.
 
     Returns:
         List[RawArticle]: Aggregated list of raw articles from all successfully polled sources.
@@ -406,6 +451,8 @@ def fetch_all_sources(
                 max_items=max_items_per_source,
                 storage=storage,
                 enable_etag_cache=enable_etag_cache,
+                max_retries=max_retries,
+                retry_backoff=retry_backoff,
             )
             articles = fetcher.fetch()
             all_articles.extend(articles)

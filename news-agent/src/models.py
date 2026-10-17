@@ -96,6 +96,35 @@ class TimeHorizon(str, Enum):
         return super()._missing_(value)
 
 
+import urllib.parse
+
+TRACKING_QUERY_PARAMS = {
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+    "ref", "fbclid", "gclid", "source", "ncid", "guccounter", "guce_referrer"
+}
+
+
+def canonicalize_url(url: str) -> str:
+    """Normalize and canonicalize URL by stripping tracking parameters, fragments, and trailing slashes."""
+    if not url:
+        return ""
+    try:
+        parsed = urllib.parse.urlsplit(url.strip())
+        if parsed.query:
+            query_pairs = urllib.parse.parse_qsl(parsed.query, keep_blank_values=False)
+            filtered = [(k, v) for k, v in query_pairs if k.lower() not in TRACKING_QUERY_PARAMS]
+            clean_query = urllib.parse.urlencode(filtered)
+        else:
+            clean_query = ""
+        path = parsed.path
+        if len(path) > 1 and path.endswith("/"):
+            path = path[:-1]
+        clean_url = urllib.parse.urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), path, clean_query, ""))
+        return clean_url
+    except Exception:
+        return url.strip()
+
+
 class RawArticle(BaseModel):
     """Normalized ingested news item before deduplication and intelligence analysis."""
     title: str = Field(..., description="Headline of the article.")
@@ -105,6 +134,13 @@ class RawArticle(BaseModel):
     summary: str = Field(default="", description="Snippet or brief description from the feed.")
     content: Optional[str] = Field(default=None, description="Extracted full body text if available.")
     guid: Optional[str] = Field(default=None, description="Unique ID from RSS/Atom entry if provided.")
+
+    @field_validator("url", mode="before")
+    @classmethod
+    def canonicalize_article_url(cls, v: Any) -> str:
+        if isinstance(v, str):
+            return canonicalize_url(v)
+        return str(v)
 
     @property
     def content_hash(self) -> str:
@@ -244,6 +280,10 @@ class MarketImpactAnalysis(BaseModel):
     token_usage: Optional[TokenUsage] = Field(
         default=None,
         description="LLM token usage and estimated cost tracking."
+    )
+    recommendation: Optional[str] = Field(
+        default=None,
+        description="Concise 1-sentence actionable analyst recommendation or monitoring posture (e.g. 'Accumulate $NVDA on dips; hedge long exposure with $SMH puts; avoid $INTC until next quarter')."
     )
     disclaimer: str = Field(
         default="⚠️ News-derived hypothesis. Market pricing, valuation, and entry points were not checked.",

@@ -2,6 +2,7 @@ import datetime
 import time
 from unittest.mock import MagicMock, patch
 import pytest
+import requests
 
 from src.config import SourceConfig
 from src.models import RawArticle
@@ -424,6 +425,95 @@ def test_fetch_all_sources_forwards_storage_and_etag_cache():
         articles = fetch_all_sources(sources, storage=mock_storage, enable_etag_cache=True)
         assert articles == []
         mock_fetch.assert_called_once()
+
+
+def test_rss_fetcher_retries_on_http_500_and_recovers():
+    src = SourceConfig(name="Failing Server", type="rss", url="https://example.com/flaky")
+    mock_storage = MagicMock()
+    mock_storage.get_feed_cache.return_value = (None, None)
+
+    mock_fail_resp = MagicMock()
+    mock_fail_resp.status_code = 500
+
+    mock_ok_resp = MagicMock()
+    mock_ok_resp.status_code = 200
+    mock_ok_resp.headers = {}
+    mock_ok_resp.content = b"<rss><channel><title>Recovered</title></channel></rss>"
+
+    mock_entry = {
+        "title": "Fed Holds Rates",
+        "link": "https://example.com/fed",
+        "published": "Sat, 18 Oct 2026 10:00:00 GMT",
+    }
+
+    with patch("requests.get", side_effect=[mock_fail_resp, mock_ok_resp]) as mock_get, \
+         patch("time.sleep") as mock_sleep, \
+         patch("feedparser.parse") as mock_parse:
+        mock_parse.return_value = {"entries": [mock_entry], "bozo": 0}
+
+        fetcher = RSSFetcher(src, storage=mock_storage, max_retries=3, retry_backoff=0.01)
+        articles = fetcher.fetch()
+
+        assert mock_get.call_count == 2
+        assert mock_sleep.call_count == 1
+        assert len(articles) == 1
+        assert articles[0].title == "Fed Holds Rates"
+
+
+def test_rss_fetcher_retries_on_connection_error_and_recovers():
+    src = SourceConfig(name="Flaky Network", type="rss", url="https://example.com/network")
+    mock_storage = MagicMock()
+    mock_storage.get_feed_cache.return_value = (None, None)
+
+    mock_ok_resp = MagicMock()
+    mock_ok_resp.status_code = 200
+    mock_ok_resp.headers = {}
+    mock_ok_resp.content = b"<rss></rss>"
+
+    with patch("requests.get", side_effect=[requests.exceptions.ConnectionError("DNS failure"), mock_ok_resp]) as mock_get, \
+         patch("time.sleep") as mock_sleep, \
+         patch("feedparser.parse") as mock_parse:
+        mock_parse.return_value = {"entries": [], "bozo": 0}
+
+        fetcher = RSSFetcher(src, storage=mock_storage, max_retries=3, retry_backoff=0.01)
+        articles = fetcher.fetch()
+
+        assert mock_get.call_count == 2
+        assert mock_sleep.call_count == 1
+        assert articles == []
+
+
+def test_rss_fetcher_exceeds_max_retries():
+    src = SourceConfig(name="Dead Feed", type="rss", url="https://example.com/dead")
+    mock_storage = MagicMock()
+    mock_storage.get_feed_cache.return_value = (None, None)
+
+    with patch("requests.get", side_effect=requests.exceptions.Timeout("Timeout")) as mock_get, \
+         patch("time.sleep") as mock_sleep:
+        fetcher = RSSFetcher(src, storage=mock_storage, max_retries=3, retry_backoff=0.01)
+        articles = fetcher.fetch()
+
+        assert mock_get.call_count == 3
+        assert mock_sleep.call_count == 2
+        assert articles == []
+
+
+def test_raw_article_canonicalize_url_and_dedup():
+    article1 = RawArticle(
+        title="Nvidia Blackwell Shipments Surge",
+        url="https://reuters.com/business/nvidia-blackwell?utm_source=twitter&utm_medium=social&ref=feed",
+        source_name="Reuters",
+    )
+    article2 = RawArticle(
+        title="Nvidia Blackwell Shipments Surge",
+        url="https://reuters.com/business/nvidia-blackwell?utm_source=rss&utm_campaign=daily",
+        source_name="Reuters",
+    )
+
+    # Both must canonicalize to the exact same clean URL and identical content_hash
+    assert article1.url == "https://reuters.com/business/nvidia-blackwell"
+    assert article2.url == "https://reuters.com/business/nvidia-blackwell"
+    assert article1.content_hash == article2.content_hash
 
 
 
