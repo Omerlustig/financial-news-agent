@@ -521,3 +521,23 @@ def test_pipeline_run_cycle_ingestion_exception_containment():
     mock_notifier.send_alert.assert_not_called()
 
 
+def test_pipeline_run_cycle_enforces_batch_size_per_source():
+    from src.config import Settings, AgentSettings
+    mock_storage = MagicMock()
+    mock_storage.filter_unseen.return_value = []
+    settings = Settings(agent=AgentSettings(batch_size_per_source=7))
+
+    with patch("src.pipeline.fetch_all_sources") as mock_fetch:
+        mock_fetch.return_value = []
+        pipeline = Pipeline(
+            storage=mock_storage,
+            settings=settings,
+        )
+        pipeline.run_cycle()
+
+        mock_fetch.assert_called_once()
+        _, kwargs = mock_fetch.call_args
+        assert kwargs.get("max_items_per_source") == 7
+
+
+

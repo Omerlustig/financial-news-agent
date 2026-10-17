@@ -260,14 +260,26 @@ class Pipeline:
         """Execute a complete scan cycle across all configured sources."""
         logger.info("Starting pipeline scan cycle across sources...")
         fetch_error = False
+        batch_size = (
+            self.settings.agent.batch_size_per_source
+            if self.settings is not None and getattr(self.settings, "agent", None) is not None
+            else None
+        )
         try:
             if self.fetcher is not None:
                 try:
-                    articles = self.fetcher(self.sources)
+                    articles = self.fetcher(self.sources, max_items_per_source=batch_size)
                 except TypeError:
-                    articles = self.fetcher()
+                    try:
+                        articles = self.fetcher(self.sources)
+                    except TypeError:
+                        articles = self.fetcher()
             else:
-                articles = fetch_all_sources(self.sources, timeout=self.fetch_timeout)
+                articles = fetch_all_sources(
+                    self.sources,
+                    timeout=self.fetch_timeout,
+                    max_items_per_source=batch_size,
+                )
         except Exception as exc:
             logger.error("Critical error during source ingestion: %s", exc, exc_info=True)
             articles = []

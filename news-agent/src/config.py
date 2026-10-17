@@ -37,6 +37,19 @@ class FilterSettings(BaseModel):
     min_impact_grade: ImpactGrade = Field(default=ImpactGrade.HIGH, description="Minimum severity grade (e.g. HIGH, CRITICAL).")
     alert_on_all: bool = Field(default=False, description="If True, bypasses filter threshold for testing.")
 
+    @field_validator("min_impact_grade", mode="before")
+    @classmethod
+    def normalize_min_impact_grade(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            cleaned = v.strip().upper()
+            if cleaned == "MEDIUM":
+                return ImpactGrade.AVERAGE
+            try:
+                return ImpactGrade(cleaned)
+            except ValueError:
+                return v
+        return v
+
 
 class LLMSettings(BaseModel):
     model: str = Field(default="gemini/gemini-1.5-flash", description="LiteLLM model identifier.")

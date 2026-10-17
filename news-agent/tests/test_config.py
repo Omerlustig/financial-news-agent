@@ -148,6 +148,34 @@ def test_min_impact_grade_validation(tmp_path):
     })
     assert settings.filter.min_impact_grade == ImpactGrade.CRITICAL
 
+    # MEDIUM alias maps to AVERAGE in Settings and FilterSettings
+    settings_medium = Settings.model_validate({
+        "filter": {"min_impact_grade": "MEDIUM"}
+    })
+    assert settings_medium.filter.min_impact_grade == ImpactGrade.AVERAGE
+
+    settings_medium_lower = Settings.model_validate({
+        "filter": {"min_impact_grade": "medium"}
+    })
+    assert settings_medium_lower.filter.min_impact_grade == ImpactGrade.AVERAGE
+
+    # Direct enum call converts MEDIUM
+    assert ImpactGrade("MEDIUM") == ImpactGrade.AVERAGE
+    assert ImpactGrade("medium") == ImpactGrade.AVERAGE
+
+    # MarketImpactAnalysis converts MEDIUM alias to AVERAGE
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=5,
+        impact_grade="MEDIUM",
+        affected_tickers=["$AAPL"],
+        affected_sectors=["Tech"],
+        summary="Medium impact event.",
+        catalyst_thesis="Average market catalyst.",
+    )
+    assert analysis.impact_grade == ImpactGrade.AVERAGE
+    assert analysis.impact_grade is ImpactGrade.AVERAGE
+
     # Invalid impact grade raises ValidationError
     with pytest.raises(ValidationError):
         Settings.model_validate({

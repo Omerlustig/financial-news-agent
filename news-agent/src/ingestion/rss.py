@@ -114,12 +114,14 @@ class RSSFetcher(BaseFetcher):
     def __init__(
         self,
         source_config: SourceConfig,
-        user_agent: str = USER_AGENT,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
+        max_items: Optional[int] = None,
+        user_agent: str = USER_AGENT,
     ) -> None:
         super().__init__(source_config)
         self.user_agent = user_agent
         self.timeout = timeout
+        self.max_items = max_items
 
     def fetch(self) -> List[RawArticle]:
         """Fetch and parse articles from the configured RSS/Atom feed.
@@ -180,6 +182,9 @@ class RSSFetcher(BaseFetcher):
                 bozo_exc,
                 len(entries),
             )
+
+        if self.max_items is not None and self.max_items > 0:
+            entries = entries[: self.max_items]
 
         articles: List[RawArticle] = []
         for entry in entries:
@@ -304,7 +309,11 @@ class RSSFetcher(BaseFetcher):
         )
 
 
-def fetch_all_sources(sources: List[SourceConfig], timeout: float = DEFAULT_TIMEOUT_SECONDS) -> List[RawArticle]:
+def fetch_all_sources(
+    sources: List[SourceConfig],
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    max_items_per_source: Optional[int] = None,
+) -> List[RawArticle]:
     """Fetch articles from all enabled sources with feed-level error containment.
 
     Iterates through all configured sources, skips disabled sources, and executes
@@ -314,6 +323,7 @@ def fetch_all_sources(sources: List[SourceConfig], timeout: float = DEFAULT_TIME
     Args:
         sources: List of SourceConfig instances to poll.
         timeout: Socket timeout in seconds for feed requests.
+        max_items_per_source: Optional maximum number of recent articles to ingest per feed.
 
     Returns:
         List[RawArticle]: Aggregated list of raw articles from all successfully polled sources.
@@ -332,7 +342,11 @@ def fetch_all_sources(sources: List[SourceConfig], timeout: float = DEFAULT_TIME
             continue
 
         try:
-            fetcher = RSSFetcher(source, timeout=timeout)
+            fetcher = RSSFetcher(
+                source,
+                timeout=timeout,
+                max_items=max_items_per_source,
+            )
             articles = fetcher.fetch()
             all_articles.extend(articles)
         except Exception as exc:

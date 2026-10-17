@@ -47,6 +47,9 @@ def test_systemd_service_file():
     service_path = root_dir / "financial-news-agent.service"
     assert service_path.exists(), "financial-news-agent.service must exist"
 
+    redundant_service = root_dir / "news-agent.service"
+    assert not redundant_service.exists(), "news-agent.service should be removed in favor of financial-news-agent.service"
+
     content = service_path.read_text()
     assert "Restart=always" in content
     assert "RestartSec=30" in content

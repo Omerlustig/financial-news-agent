@@ -167,7 +167,7 @@ agent:
 
 filter:
   min_confidence_score: 6         # Minimum LLM confidence score (1-10) to alert
-  min_impact_grade: "HIGH"        # Options: LOW, MEDIUM, HIGH, CRITICAL
+  min_impact_grade: "HIGH"        # Options: LOW, AVERAGE (or MEDIUM), HIGH, CRITICAL
   alert_on_all: false             # Set true to alert on all articles regardless of score
 
 llm:

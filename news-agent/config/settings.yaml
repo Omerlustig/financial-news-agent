@@ -5,7 +5,7 @@ agent:
 
 filter:
   min_confidence_score: 6
-  min_impact_grade: "HIGH"
+  min_impact_grade: "HIGH" # Options: LOW, AVERAGE (or MEDIUM), HIGH, CRITICAL
   alert_on_all: false
 
 llm:

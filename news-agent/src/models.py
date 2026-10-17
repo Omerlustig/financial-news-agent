@@ -12,6 +12,17 @@ class ImpactGrade(str, Enum):
     HIGH = "HIGH"
     CRITICAL = "CRITICAL"
 
+    @classmethod
+    def _missing_(cls, value: object) -> Any:
+        if isinstance(value, str):
+            normalized = value.strip().upper()
+            if normalized == "MEDIUM":
+                return cls.AVERAGE
+            for member in cls:
+                if member.value == normalized:
+                    return member
+        return super()._missing_(value)
+
 
 class RawArticle(BaseModel):
     """Normalized ingested news item before deduplication and intelligence analysis."""
@@ -62,6 +73,19 @@ class MarketImpactAnalysis(BaseModel):
         ...,
         description="Financial analyst thesis detailing the exact mechanism of market impact (revenue, margin, regulation, supply chain)."
     )
+
+    @field_validator("impact_grade", mode="before")
+    @classmethod
+    def normalize_impact_grade(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            cleaned = v.strip().upper()
+            if cleaned == "MEDIUM":
+                return ImpactGrade.AVERAGE
+            try:
+                return ImpactGrade(cleaned)
+            except ValueError:
+                return v
+        return v
 
     @field_validator("affected_tickers", mode="before")
     @classmethod

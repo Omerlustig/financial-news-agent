@@ -303,3 +303,48 @@ def test_fetch_all_sources_empty():
     assert fetch_all_sources([]) == []
     assert fetch_all_sources([SourceConfig(name="Off", type="rss", url="https://off.com", enabled=False)]) == []
 
+
+def test_rss_fetcher_max_items_limiting():
+    src = SourceConfig(name="LimitFeed", type="rss", url="https://limitfeed.com/rss")
+    entries_5 = [
+        {"title": f"Article {i}", "link": f"https://limitfeed.com/{i}"}
+        for i in range(1, 6)
+    ]
+
+    with patch("feedparser.parse", return_value={"entries": entries_5, "bozo": 0}):
+        fetcher_limited = RSSFetcher(src, max_items=2)
+        articles_limited = fetcher_limited.fetch()
+        assert len(articles_limited) == 2
+        assert articles_limited[0].title == "Article 1"
+        assert articles_limited[1].title == "Article 2"
+
+        fetcher_unlimited = RSSFetcher(src, max_items=None)
+        articles_unlimited = fetcher_unlimited.fetch()
+        assert len(articles_unlimited) == 5
+
+
+def test_fetch_all_sources_max_items_per_source():
+    sources = [
+        SourceConfig(name="S1", type="rss", url="https://s1.com/rss"),
+        SourceConfig(name="S2", type="rss", url="https://s2.com/rss"),
+    ]
+
+    def mock_parse(url, **kwargs):
+        prefix = "S1" if "s1.com" in url else "S2"
+        return {
+            "entries": [
+                {"title": f"{prefix} Art {i}", "link": f"https://{prefix.lower()}.com/{i}"}
+                for i in range(1, 6)
+            ],
+            "bozo": 0,
+        }
+
+    with patch("feedparser.parse", side_effect=mock_parse):
+        articles = fetch_all_sources(sources, max_items_per_source=3)
+        assert len(articles) == 6
+        s1_articles = [a for a in articles if a.source_name == "S1"]
+        s2_articles = [a for a in articles if a.source_name == "S2"]
+        assert len(s1_articles) == 3
+        assert len(s2_articles) == 3
+
+
