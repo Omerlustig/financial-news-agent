@@ -193,7 +193,15 @@ class MarketImpactAnalyzer:
                         e,
                     )
 
-                    # Immediate failover upon 429 rate limit
+                    is_auth_error = (
+                        getattr(e, "status_code", None) in (401, 403)
+                        or "api key" in str(e).lower()
+                        or "credentials" in str(e).lower()
+                        or "authentication" in str(e).lower()
+                        or "unauthorized" in str(e).lower()
+                    )
+
+                    # Immediate failover upon 429 rate limit or missing/invalid API key
                     if has_fallback_remaining and is_rate_limit:
                         next_model = candidate_models[model_idx + 1]
                         logger.warning(
@@ -201,6 +209,16 @@ class MarketImpactAnalyzer:
                             target_model,
                             next_model,
                         )
+                        break
+
+                    if is_auth_error:
+                        if has_fallback_remaining:
+                            next_model = candidate_models[model_idx + 1]
+                            logger.warning(
+                                "Model '%s' encountered auth/missing API key; failing over immediately to fallback model '%s'",
+                                target_model,
+                                next_model,
+                            )
                         break
 
                     if attempt < self.max_retries:

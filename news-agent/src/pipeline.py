@@ -138,9 +138,9 @@ class Pipeline:
         if analyzer is not None:
             self.analyzer = analyzer
         elif settings is not None:
-            self.analyzer = MarketImpactAnalyzer(settings.llm)
+            self.analyzer = MarketImpactAnalyzer(settings.llm, fallback_on_error=True)
         else:
-            self.analyzer = MarketImpactAnalyzer()
+            self.analyzer = MarketImpactAnalyzer(fallback_on_error=True)
 
         # Notification subsystem
         if notifier is not None:
