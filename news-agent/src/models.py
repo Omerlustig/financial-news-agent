@@ -180,6 +180,15 @@ class HardGates(BaseModel):
         return self
 
 
+class TokenUsage(BaseModel):
+    """LLM token telemetry and cost estimation metadata."""
+    prompt_tokens: int = Field(default=0, description="Prompt/input tokens consumed.")
+    completion_tokens: int = Field(default=0, description="Completion/output tokens generated.")
+    total_tokens: int = Field(default=0, description="Total tokens consumed.")
+    estimated_cost_usd: float = Field(default=0.0, description="Estimated total cost in USD.")
+    model_name: str = Field(default="", description="Identifier of the model used.")
+
+
 class MarketImpactAnalysis(BaseModel):
     """Institutional financial analyst reasoning and scoring output."""
     is_market_moving: bool = Field(
@@ -231,6 +240,10 @@ class MarketImpactAnalysis(BaseModel):
     hard_gates: Optional[HardGates] = Field(
         default=None,
         description="Quality gating evaluation (novelty, verification, direct exposure)."
+    )
+    token_usage: Optional[TokenUsage] = Field(
+        default=None,
+        description="LLM token usage and estimated cost tracking."
     )
     disclaimer: str = Field(
         default="⚠️ News-derived hypothesis. Market pricing, valuation, and entry points were not checked.",

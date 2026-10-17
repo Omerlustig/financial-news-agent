@@ -333,6 +333,18 @@ def test_storage_fail_fast_on_closed(tmp_path):
     with pytest.raises(RuntimeError, match="Database connection is closed"):
         storage.get_stats()
 
+    with pytest.raises(RuntimeError, match="Database connection is closed"):
+        storage.get_feed_cache("https://example.com/rss")
+
+    with pytest.raises(RuntimeError, match="Database connection is closed"):
+        storage.set_feed_cache("https://example.com/rss", "etag-1", "mod-1")
+
+    with pytest.raises(RuntimeError, match="Database connection is closed"):
+        storage.record_llm_metric("hash-1", "gemini-1.5-flash", 100, 50, 150, 0.001)
+
+    with pytest.raises(RuntimeError, match="Database connection is closed"):
+        storage.get_metrics_summary()
+
 
 def test_transaction_rollback_on_failure(tmp_path):
     storage = SQLiteStorage(str(tmp_path / "rollback.db"))
@@ -521,5 +533,123 @@ def test_storage_schema_migration_safety(tmp_path):
 
     conn.close()
     storage.close()
+
+
+def test_feed_cache_operations(tmp_path):
+    storage = SQLiteStorage(str(tmp_path / "feed_cache.db"))
+
+    # Non-existent or empty URL returns (None, None)
+    assert storage.get_feed_cache("https://example.com/rss") == (None, None)
+    assert storage.get_feed_cache("") == (None, None)
+
+    # Empty URL does nothing on set
+    storage.set_feed_cache("", "etag-empty", "mod-empty")
+
+    # Set feed cache
+    feed_url = "https://feeds.reuters.com/businessNews"
+    etag_1 = '"12345abcdef"'
+    last_mod_1 = "Fri, 17 Oct 2026 12:00:00 GMT"
+    storage.set_feed_cache(feed_url, etag=etag_1, last_modified=last_mod_1)
+
+    cached_etag, cached_mod = storage.get_feed_cache(feed_url)
+    assert cached_etag == etag_1
+    assert cached_mod == last_mod_1
+
+    # Update cache (upsert)
+    etag_2 = '"67890ghijkl"'
+    last_mod_2 = "Fri, 17 Oct 2026 13:00:00 GMT"
+    storage.set_feed_cache(feed_url, etag=etag_2, last_modified=last_mod_2)
+
+    cached_etag_upd, cached_mod_upd = storage.get_feed_cache(feed_url)
+    assert cached_etag_upd == etag_2
+    assert cached_mod_upd == last_mod_2
+
+    # Verify table schema directly
+    conn = sqlite3.connect(storage.db_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT * FROM feed_cache WHERE url = ?", (feed_url,)).fetchone()
+    assert row is not None
+    assert row["url"] == feed_url
+    assert row["etag"] == etag_2
+    assert row["last_modified"] == last_mod_2
+    assert row["updated_at"] is not None
+    conn.close()
+    storage.close()
+
+
+def test_llm_metrics_operations(tmp_path):
+    storage = SQLiteStorage(str(tmp_path / "llm_metrics.db"))
+
+    # Initial summary on empty database
+    empty_summary = storage.get_metrics_summary()
+    assert empty_summary["total_calls"] == 0
+    assert empty_summary["total_prompt_tokens"] == 0
+    assert empty_summary["total_completion_tokens"] == 0
+    assert empty_summary["total_tokens"] == 0
+    assert empty_summary["total_cost_usd"] == 0.0
+    assert empty_summary["calls_by_model"] == {}
+    assert empty_summary["spend_this_month"] == 0.0
+
+    # Record metrics for gemini
+    storage.record_llm_metric(
+        content_hash="hash_art_1",
+        model_name="gemini/gemini-1.5-flash",
+        prompt_tokens=400,
+        completion_tokens=100,
+        total_tokens=500,
+        cost_usd=0.0001,
+    )
+    storage.record_llm_metric(
+        content_hash="hash_art_2",
+        model_name="gemini/gemini-1.5-flash",
+        prompt_tokens=600,
+        completion_tokens=200,
+        total_tokens=800,
+        cost_usd=0.0002,
+    )
+
+    # Record metric for fallback model gpt-4o-mini
+    storage.record_llm_metric(
+        content_hash="hash_art_3",
+        model_name="gpt-4o-mini",
+        prompt_tokens=500,
+        completion_tokens=150,
+        total_tokens=650,
+        cost_usd=0.00015,
+    )
+
+    summary = storage.get_metrics_summary()
+    assert summary["total_calls"] == 3
+    assert summary["total_prompt_tokens"] == 1500
+    assert summary["total_completion_tokens"] == 450
+    assert summary["total_tokens"] == 1950
+    assert pytest.approx(summary["total_cost_usd"], rel=1e-5) == 0.00045
+    assert summary["calls_by_model"] == {
+        "gemini/gemini-1.5-flash": 2,
+        "gpt-4o-mini": 1,
+    }
+    assert pytest.approx(summary["spend_this_month"], rel=1e-5) == 0.00045
+
+    # Insert a metric record from a previous month directly to test monthly spend isolation
+    conn = sqlite3.connect(storage.db_path)
+    conn.execute(
+        """
+        INSERT INTO llm_metrics (
+            content_hash, model_name, prompt_tokens, completion_tokens, total_tokens, cost_usd, created_at
+        ) VALUES ('past_hash', 'gemini/gemini-1.5-flash', 1000, 500, 1500, 0.05, '2025-01-15T10:00:00')
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    updated_summary = storage.get_metrics_summary()
+    # Total calls and total cost should include the past month record
+    assert updated_summary["total_calls"] == 4
+    assert pytest.approx(updated_summary["total_cost_usd"], rel=1e-5) == 0.05045
+    # spend_this_month must ONLY reflect current month spend
+    assert pytest.approx(updated_summary["spend_this_month"], rel=1e-5) == 0.00045
+
+    storage.close()
+
 
 

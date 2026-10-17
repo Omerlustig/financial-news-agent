@@ -10,8 +10,9 @@ from src.models import (
     TimeHorizon,
     CausalChain,
     HardGates,
+    TokenUsage,
 )
-from src.config import load_settings, load_sources, Settings, SourceConfig
+from src.config import load_settings, load_sources, Settings, SourceConfig, AgentSettings, LLMSettings
 
 
 def test_raw_article_hash():
@@ -64,6 +65,7 @@ def test_market_impact_analysis_model():
     assert analysis.time_horizon is None
     assert analysis.causal_chain is None
     assert analysis.hard_gates is None
+    assert analysis.token_usage is None
     assert "News-derived hypothesis" in analysis.disclaimer
 
     # Confidence score must be 1 to 10
@@ -77,6 +79,76 @@ def test_market_impact_analysis_model():
             summary="Invalid",
             catalyst_thesis="Invalid",
         )
+
+
+def test_token_usage_model():
+    # Test default values
+    usage = TokenUsage()
+    assert usage.prompt_tokens == 0
+    assert usage.completion_tokens == 0
+    assert usage.total_tokens == 0
+    assert usage.estimated_cost_usd == 0.0
+    assert usage.model_name == ""
+
+    # Test explicit values
+    custom_usage = TokenUsage(
+        prompt_tokens=350,
+        completion_tokens=150,
+        total_tokens=500,
+        estimated_cost_usd=0.00015,
+        model_name="gemini/gemini-1.5-flash",
+    )
+    assert custom_usage.prompt_tokens == 350
+    assert custom_usage.completion_tokens == 150
+    assert custom_usage.total_tokens == 500
+    assert custom_usage.estimated_cost_usd == 0.00015
+    assert custom_usage.model_name == "gemini/gemini-1.5-flash"
+
+    # Attach token_usage to MarketImpactAnalysis
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=8,
+        impact_grade=ImpactGrade.HIGH,
+        affected_tickers=["$NVDA"],
+        affected_sectors=["Tech"],
+        summary="Impact analysis with telemetry",
+        catalyst_thesis="Revenue impact thesis",
+        token_usage=custom_usage,
+    )
+    assert analysis.token_usage is not None
+    assert analysis.token_usage.total_tokens == 500
+    assert analysis.token_usage.model_name == "gemini/gemini-1.5-flash"
+
+
+def test_agent_settings_etag_cache():
+    # Default is enabled
+    agent = AgentSettings()
+    assert agent.enable_etag_cache is True
+
+    # Custom override
+    agent_disabled = AgentSettings(enable_etag_cache=False)
+    assert agent_disabled.enable_etag_cache is False
+
+
+def test_llm_settings_upgrades():
+    # Test default values
+    llm = LLMSettings()
+    assert llm.model == "gemini/gemini-1.5-flash"
+    assert llm.fallback_model == "gpt-4o-mini"
+    assert llm.enable_cache is True
+    assert llm.monthly_budget_usd == 10.0
+
+    # Custom overrides
+    custom_llm = LLMSettings(
+        model="claude-3-5-sonnet",
+        fallback_model=None,
+        enable_cache=False,
+        monthly_budget_usd=25.0,
+    )
+    assert custom_llm.model == "claude-3-5-sonnet"
+    assert custom_llm.fallback_model is None
+    assert custom_llm.enable_cache is False
+    assert custom_llm.monthly_budget_usd == 25.0
 
 
 def test_load_default_sources(tmp_path):
@@ -124,10 +196,14 @@ def test_load_actual_sources_yaml():
 def test_load_actual_settings_yaml():
     settings = load_settings()
     assert settings.agent.polling_interval_minutes > 0
+    assert settings.agent.enable_etag_cache is True
     assert settings.filter.min_confidence_score >= 1
     assert isinstance(settings.filter.min_impact_grade, ImpactGrade)
     assert settings.filter.min_impact_grade == ImpactGrade.HIGH
-    assert settings.llm.model
+    assert settings.llm.model == "gemini/gemini-1.5-flash"
+    assert settings.llm.fallback_model == "gpt-4o-mini"
+    assert settings.llm.enable_cache is True
+    assert settings.llm.monthly_budget_usd == 10.0
     # Unset telegram env vars should resolve to None rather than empty string
     assert settings.telegram.bot_token is None or isinstance(settings.telegram.bot_token, str)
 

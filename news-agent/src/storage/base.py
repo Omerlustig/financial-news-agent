@@ -1,11 +1,11 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from src.models import MarketImpactAnalysis, RawArticle
 
 
 class BaseStorage(ABC):
-    """Abstract base class defining contract for article persistence and deduplication."""
+    """Abstract base class defining contract for article persistence, caching, and telemetry."""
 
     @abstractmethod
     def is_article_seen(self, content_hash: str) -> bool:
@@ -30,6 +30,34 @@ class BaseStorage(ABC):
     @abstractmethod
     def get_stats(self) -> Dict[str, Any]:
         """Return aggregate storage statistics (total articles, alerted count, market moving count)."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_feed_cache(self, url: str) -> Tuple[Optional[str], Optional[str]]:
+        """Retrieve cached ETag and Last-Modified headers for a feed URL."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def set_feed_cache(self, url: str, etag: Optional[str], last_modified: Optional[str]) -> None:
+        """Store or update cached ETag and Last-Modified headers for a feed URL."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def record_llm_metric(
+        self,
+        content_hash: str,
+        model_name: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        total_tokens: int,
+        cost_usd: float,
+    ) -> None:
+        """Record LLM token consumption and estimated cost."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_metrics_summary(self) -> Dict[str, Any]:
+        """Return aggregate LLM usage telemetry and expenditure metrics."""
         raise NotImplementedError
 
     def close(self) -> None:

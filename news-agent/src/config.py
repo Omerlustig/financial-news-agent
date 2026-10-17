@@ -30,6 +30,7 @@ class AgentSettings(BaseModel):
     polling_interval_minutes: int = Field(default=15, description="Minutes between poll cycles in daemon mode.")
     batch_size_per_source: int = Field(default=15, description="Maximum articles fetched per feed per cycle.")
     database_path: str = Field(default="data/agent.db", description="Path to SQLite database.")
+    enable_etag_cache: bool = Field(default=True, description="Enable HTTP conditional GET caching for feeds.")
 
 
 class FilterSettings(BaseModel):
@@ -53,6 +54,9 @@ class FilterSettings(BaseModel):
 
 class LLMSettings(BaseModel):
     model: str = Field(default="gemini/gemini-1.5-flash", description="LiteLLM model identifier.")
+    fallback_model: Optional[str] = Field(default="gpt-4o-mini", description="Fallback LiteLLM model identifier.")
+    enable_cache: bool = Field(default=True, description="Enable local response caching.")
+    monthly_budget_usd: Optional[float] = Field(default=10.0, description="Monthly budget limit in USD.")
     temperature: float = Field(default=0.1, description="Sampling temperature for deterministic analysis.")
     max_retries: int = Field(default=3, description="Maximum API retries upon rate limit or transient errors.")
 
