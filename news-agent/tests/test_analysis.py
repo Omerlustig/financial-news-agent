@@ -752,3 +752,116 @@ def test_analyzer_causal_chain_ticker_sanitization_and_synthesis():
         assert "$US" not in result.affected_tickers
         assert "$FED" not in result.affected_tickers
 
+
+def test_analyzer_attaches_token_usage_and_cost():
+    """Verify that token consumption and estimated cost are accurately attached to analysis."""
+    analyzer = MarketImpactAnalyzer(model="gemini/gemini-1.5-flash")
+    article = RawArticle(
+        title="NVIDIA Q3 Earnings Beat",
+        url="https://example.com/nvda",
+        source_name="CNBC",
+        published_at=None,
+        summary="Data center revenue surged.",
+    )
+
+    class MockUsage:
+        prompt_tokens = 420
+        completion_tokens = 80
+        total_tokens = 500
+
+    mock_resp = {
+        "choices": [{"message": {"content": MOCK_LLM_JSON}}],
+        "usage": MockUsage(),
+    }
+
+    with patch("litellm.completion", return_value=mock_resp), \
+         patch("litellm.completion_cost", return_value=0.000125):
+        result = analyzer.analyze(article)
+
+        assert result.token_usage is not None
+        assert result.token_usage.prompt_tokens == 420
+        assert result.token_usage.completion_tokens == 80
+        assert result.token_usage.total_tokens == 500
+        assert pytest.approx(result.token_usage.estimated_cost_usd, rel=1e-5) == 0.000125
+        assert result.token_usage.model_name == "gemini/gemini-1.5-flash"
+
+
+def test_analyzer_failover_on_primary_model_failure():
+    """Verify automatic failover to fallback_model when primary model fails after retries."""
+    analyzer = MarketImpactAnalyzer(
+        model="gemini/gemini-1.5-flash",
+        fallback_model="gpt-4o-mini",
+        max_retries=2,
+    )
+    article = RawArticle(
+        title="Fed Interest Rate Decision",
+        url="https://example.com/fed",
+        source_name="Reuters",
+    )
+
+    models_called = []
+
+    def mock_completion(model, **kwargs):
+        models_called.append(model)
+        if model == "gemini/gemini-1.5-flash":
+            raise Exception("500 Internal Server Error on primary model")
+        return {
+            "choices": [{"message": {"content": MOCK_LLM_JSON}}],
+            "usage": {"prompt_tokens": 300, "completion_tokens": 100, "total_tokens": 400},
+        }
+
+    with patch("litellm.completion", side_effect=mock_completion), \
+         patch("litellm.completion_cost", return_value=0.00008), \
+         patch("time.sleep"):
+        result = analyzer.analyze(article)
+
+        assert result.token_usage is not None
+        assert result.token_usage.model_name == "gpt-4o-mini"
+        assert result.token_usage.total_tokens == 400
+        assert pytest.approx(result.token_usage.estimated_cost_usd, rel=1e-5) == 0.00008
+        # Primary was called twice (max_retries=2), followed by fallback model
+        assert models_called == [
+            "gemini/gemini-1.5-flash",
+            "gemini/gemini-1.5-flash",
+            "gpt-4o-mini",
+        ]
+
+
+def test_analyzer_immediate_failover_on_429_rate_limit():
+    """Verify immediate failover to fallback model upon encountering HTTP 429 rate limit."""
+    analyzer = MarketImpactAnalyzer(
+        model="gemini/gemini-1.5-flash",
+        fallback_model="gpt-4o-mini",
+        max_retries=3,
+    )
+    article = RawArticle(
+        title="Rate Hike Expected",
+        url="https://example.com/hike",
+        source_name="Bloomberg",
+    )
+
+    models_called = []
+
+    class RateLimitError(Exception):
+        status_code = 429
+
+    def mock_completion(model, **kwargs):
+        models_called.append(model)
+        if model == "gemini/gemini-1.5-flash":
+            raise RateLimitError("Rate limit exceeded (429: Too Many Requests)")
+        return {
+            "choices": [{"message": {"content": MOCK_LLM_JSON}}],
+            "usage": {"prompt_tokens": 250, "completion_tokens": 50, "total_tokens": 300},
+        }
+
+    with patch("litellm.completion", side_effect=mock_completion), \
+         patch("litellm.completion_cost", return_value=0.00005), \
+         patch("time.sleep"):
+        result = analyzer.analyze(article)
+
+        assert result.token_usage is not None
+        assert result.token_usage.model_name == "gpt-4o-mini"
+        # Primary called only once because 429 triggered immediate failover
+        assert models_called == ["gemini/gemini-1.5-flash", "gpt-4o-mini"]
+
+

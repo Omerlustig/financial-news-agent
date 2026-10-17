@@ -82,3 +82,68 @@ def test_readme_comprehensive_content():
     assert "test-connections" in content
     assert "test-source" in content
     assert "stats" in content
+
+
+def test_vercel_manifest():
+    """Verify vercel.json defines cron schedule for /api/cron every 15 minutes."""
+    import json
+    root_dir = Path(__file__).resolve().parent.parent
+    vercel_path = root_dir / "vercel.json"
+    assert vercel_path.exists(), "vercel.json must exist in news-agent/"
+
+    content = json.loads(vercel_path.read_text())
+    assert "crons" in content
+    assert len(content["crons"]) >= 1
+
+    cron_entry = content["crons"][0]
+    assert cron_entry.get("path") == "/api/cron"
+    assert cron_entry.get("schedule") == "*/15 * * * *"
+
+
+def test_serverless_cron_handler():
+    """Verify api/cron.py handler invokes Pipeline.run_cycle and returns JSON status and summary."""
+    from unittest.mock import patch, MagicMock
+    from api.cron import handler
+    from src.pipeline import CycleSummary
+
+    mock_summary = CycleSummary(fetched=5, new_unseen=2, analyzed=2, alerted=1, errors=0)
+
+    with patch("api.cron.Pipeline") as mock_pipeline_cls:
+        mock_instance = MagicMock()
+        mock_instance.__enter__.return_value = mock_instance
+        mock_instance.run_cycle.return_value = mock_summary
+        mock_pipeline_cls.return_value = mock_instance
+
+        resp = handler()
+        assert resp["statusCode"] == 200
+        assert resp["status"] == "success"
+        assert resp["summary"]["fetched"] == 5
+        assert resp["summary"]["alerted"] == 1
+
+
+def test_serverless_cron_handler_error_isolation():
+    """Verify api/cron.py catches unhandled pipeline exceptions and returns 500 error JSON."""
+    from unittest.mock import patch
+    from api.cron import handler
+
+    with patch("api.cron.Pipeline", side_effect=RuntimeError("Database lock failure")):
+        resp = handler()
+        assert resp["statusCode"] == 500
+        assert resp["status"] == "error"
+        assert "Database lock failure" in resp["error"]
+
+
+def test_deploy_cloudrun_script():
+    """Verify deploy_cloudrun.sh exists, is executable, and contains required deployment steps."""
+    root_dir = Path(__file__).resolve().parent.parent
+    script_path = root_dir / "deploy_cloudrun.sh"
+    assert script_path.exists(), "deploy_cloudrun.sh must exist in news-agent/"
+    assert os.access(script_path, os.X_OK), "deploy_cloudrun.sh must be executable"
+
+    content = script_path.read_text()
+    assert "set -euo pipefail" in content
+    assert "gcloud builds submit" in content
+    assert "gcloud run jobs" in content or "gcloud run deploy" in content
+    assert "gcloud scheduler jobs" in content
+    assert "*/15 * * * *" in content
+

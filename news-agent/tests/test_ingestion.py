@@ -1,6 +1,6 @@
 import datetime
 import time
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 import pytest
 
 from src.config import SourceConfig
@@ -346,5 +346,84 @@ def test_fetch_all_sources_max_items_per_source():
         s2_articles = [a for a in articles if a.source_name == "S2"]
         assert len(s1_articles) == 3
         assert len(s2_articles) == 3
+
+
+def test_rss_fetcher_etag_304_skips_parsing():
+    """Verify that HTTP 304 response skips parsing and returns an empty list."""
+    src = SourceConfig(name="ETag Feed", type="rss", url="https://example.com/cached-rss", enabled=True)
+    mock_storage = MagicMock()
+    mock_storage.get_feed_cache.return_value = ('"etag-123"', "Fri, 17 Oct 2026 12:00:00 GMT")
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 304
+
+    with patch("requests.get", return_value=mock_resp) as mock_get, \
+         patch("feedparser.parse") as mock_parse:
+        fetcher = RSSFetcher(src, storage=mock_storage, enable_etag_cache=True)
+        articles = fetcher.fetch()
+
+        # Must send If-None-Match and If-Modified-Since headers
+        mock_get.assert_called_once()
+        headers = mock_get.call_args.kwargs["headers"]
+        assert headers.get("If-None-Match") == '"etag-123"'
+        assert headers.get("If-Modified-Since") == "Fri, 17 Oct 2026 12:00:00 GMT"
+
+        # 304 means unchanged: parsing must NOT be performed, empty list returned
+        mock_parse.assert_not_called()
+        assert articles == []
+        mock_storage.set_feed_cache.assert_not_called()
+
+
+def test_rss_fetcher_etag_200_caches_headers_and_parses():
+    """Verify that HTTP 200 response caches headers in storage and parses feed content."""
+    src = SourceConfig(name="Fresh Feed", type="rss", url="https://example.com/fresh-rss", enabled=True)
+    mock_storage = MagicMock()
+    mock_storage.get_feed_cache.return_value = (None, None)
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.headers = {
+        "ETag": '"new-etag-999"',
+        "Last-Modified": "Sat, 18 Oct 2026 10:00:00 GMT",
+    }
+    mock_resp.content = b"<rss><channel><title>Fresh</title></channel></rss>"
+
+    mock_entry = {
+        "title": "Markets Rally on Tech Earnings",
+        "link": "https://example.com/rally",
+        "summary": "Tech shares jumped today.",
+        "published": "Sat, 18 Oct 2026 10:00:00 GMT",
+    }
+
+    with patch("requests.get", return_value=mock_resp) as mock_get, \
+         patch("feedparser.parse") as mock_parse:
+        mock_parse.return_value = {"entries": [mock_entry], "bozo": 0}
+
+        fetcher = RSSFetcher(src, storage=mock_storage, enable_etag_cache=True)
+        articles = fetcher.fetch()
+
+        mock_get.assert_called_once()
+        mock_parse.assert_called_once_with(mock_resp.content)
+        mock_storage.set_feed_cache.assert_called_once_with(
+            "https://example.com/fresh-rss",
+            '"new-etag-999"',
+            "Sat, 18 Oct 2026 10:00:00 GMT",
+        )
+
+        assert len(articles) == 1
+        assert articles[0].title == "Markets Rally on Tech Earnings"
+        assert articles[0].url == "https://example.com/rally"
+
+
+def test_fetch_all_sources_forwards_storage_and_etag_cache():
+    """Verify fetch_all_sources passes storage and enable_etag_cache to RSSFetcher."""
+    sources = [SourceConfig(name="S1", type="rss", url="https://example.com/rss1")]
+    mock_storage = MagicMock()
+
+    with patch.object(RSSFetcher, "fetch", return_value=[]) as mock_fetch:
+        articles = fetch_all_sources(sources, storage=mock_storage, enable_etag_cache=True)
+        assert articles == []
+        mock_fetch.assert_called_once()
+
 
 

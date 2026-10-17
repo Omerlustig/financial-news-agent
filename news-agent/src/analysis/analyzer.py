@@ -15,8 +15,10 @@ from src.models import (
     TimeHorizon,
     CausalChain,
     HardGates,
+    TokenUsage,
 )
 from src.config import LLMSettings
+from src.storage.base import BaseStorage
 from src.analysis.prompts import build_analyst_prompt, filter_valid_tickers
 
 logger = logging.getLogger(__name__)
@@ -62,13 +64,27 @@ class MarketImpactAnalyzer:
         retry_delay: float = 1.0,
         backoff_factor: float = 2.0,
         fallback_on_error: bool = False,
+        fallback_model: Optional[str] = None,
+        storage: Optional[BaseStorage] = None,
+        llm_settings: Optional[LLMSettings] = None,
     ):
-        if isinstance(model, LLMSettings):
+        self.storage = storage
+        self.llm_settings = llm_settings
+
+        if llm_settings is not None:
+            self.model = llm_settings.model
+            self.fallback_model = fallback_model or llm_settings.fallback_model
+            self.temperature = llm_settings.temperature
+            self.max_retries = llm_settings.max_retries
+        elif isinstance(model, LLMSettings):
+            self.llm_settings = model
             self.model = model.model
+            self.fallback_model = fallback_model or model.fallback_model
             self.temperature = model.temperature
             self.max_retries = model.max_retries
         else:
             self.model = model
+            self.fallback_model = fallback_model
             self.temperature = temperature
             self.max_retries = max_retries
 
@@ -77,45 +93,116 @@ class MarketImpactAnalyzer:
         self.fallback_on_error = fallback_on_error
 
     def analyze(self, article: RawArticle) -> MarketImpactAnalysis:
-        """Analyzes an article using litellm with exponential backoff retries on API & parse errors."""
+        """Analyzes an article using litellm with failover to fallback_model and exponential backoff retries."""
         system_prompt, user_prompt = build_analyst_prompt(article)
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ]
 
+        candidate_models = [self.model]
+        if self.fallback_model and self.fallback_model != self.model:
+            candidate_models.append(self.fallback_model)
+
         last_error: Optional[Exception] = None
-        current_delay = self.retry_delay
 
-        for attempt in range(1, self.max_retries + 1):
-            try:
-                logger.debug(
-                    "Submitting LLM analysis request (attempt %d/%d) for article: %s",
-                    attempt,
-                    self.max_retries,
-                    article.title,
-                )
-                response = litellm.completion(
-                    model=self.model,
-                    messages=messages,
-                    temperature=self.temperature,
-                    response_format={"type": "json_object"},
-                )
-                raw_content = self._extract_content(response)
-                return self._parse_and_validate(raw_content, article)
-            except Exception as e:
-                last_error = e
+        for model_idx, target_model in enumerate(candidate_models):
+            is_fallback = model_idx > 0
+            has_fallback_remaining = model_idx < len(candidate_models) - 1
+            current_delay = self.retry_delay
+
+            for attempt in range(1, self.max_retries + 1):
+                try:
+                    logger.debug(
+                        "Submitting LLM analysis request (model=%s, attempt %d/%d) for article: %s",
+                        target_model,
+                        attempt,
+                        self.max_retries,
+                        article.title,
+                    )
+                    response = litellm.completion(
+                        model=target_model,
+                        messages=messages,
+                        temperature=self.temperature,
+                        response_format={"type": "json_object"},
+                    )
+                    raw_content = self._extract_content(response)
+                    analysis = self._parse_and_validate(raw_content, article)
+
+                    # Observability & Token Telemetry Extraction
+                    usage = getattr(response, "usage", None)
+                    if usage is None and isinstance(response, dict):
+                        usage = response.get("usage")
+
+                    prompt_tokens = 0
+                    completion_tokens = 0
+                    total_tokens = 0
+                    if usage is not None:
+                        if isinstance(usage, dict):
+                            prompt_tokens = int(usage.get("prompt_tokens") or 0)
+                            completion_tokens = int(usage.get("completion_tokens") or 0)
+                            total_tokens = int(usage.get("total_tokens") or (prompt_tokens + completion_tokens))
+                        else:
+                            prompt_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+                            completion_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+                            total_tokens = int(getattr(usage, "total_tokens", 0) or (prompt_tokens + completion_tokens))
+
+                    try:
+                        cost = float(litellm.completion_cost(completion_response=response))
+                    except Exception:
+                        cost = 0.0
+
+                    analysis.token_usage = TokenUsage(
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        total_tokens=total_tokens,
+                        estimated_cost_usd=cost,
+                        model_name=target_model,
+                    )
+                    return analysis
+
+                except Exception as e:
+                    last_error = e
+                    is_rate_limit = (
+                        getattr(e, "status_code", None) == 429
+                        or "429" in str(e)
+                        or "rate_limit" in str(e).lower()
+                        or "ratelimit" in str(e).lower()
+                    )
+
+                    logger.warning(
+                        "LLM analysis attempt %d/%d on model '%s' failed (%s): %s",
+                        attempt,
+                        self.max_retries,
+                        target_model,
+                        "rate limit 429" if is_rate_limit else "API or parse error",
+                        e,
+                    )
+
+                    # Immediate failover upon 429 rate limit
+                    if has_fallback_remaining and is_rate_limit:
+                        next_model = candidate_models[model_idx + 1]
+                        logger.warning(
+                            "Model '%s' hit 429 rate limit; failing over immediately to fallback model '%s'",
+                            target_model,
+                            next_model,
+                        )
+                        break
+
+                    if attempt < self.max_retries:
+                        time.sleep(current_delay)
+                        current_delay *= self.backoff_factor
+
+            # Failover after exhausting retries on current model
+            if has_fallback_remaining:
+                next_model = candidate_models[model_idx + 1]
                 logger.warning(
-                    "LLM analysis attempt %d/%d failed (API or parse error): %s",
-                    attempt,
-                    self.max_retries,
-                    e,
+                    "Model '%s' failed all attempts; failing over to fallback model '%s'",
+                    target_model,
+                    next_model,
                 )
-                if attempt < self.max_retries:
-                    time.sleep(current_delay)
-                    current_delay *= self.backoff_factor
 
-        # All retries failed
+        # All models and retries failed
         error_msg = f"LLM analysis failed after {self.max_retries} retries (unparseable JSON or API error): {last_error}"
         logger.error(error_msg)
         if self.fallback_on_error:

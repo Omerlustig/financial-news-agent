@@ -258,6 +258,25 @@ class Pipeline:
                 errors_count += 1
                 continue
 
+            # Record LLM observability and token usage telemetry
+            if analysis.token_usage is not None and self.storage is not None:
+                try:
+                    self.storage.record_llm_metric(
+                        content_hash=article.content_hash,
+                        model_name=analysis.token_usage.model_name or "unknown",
+                        prompt_tokens=analysis.token_usage.prompt_tokens,
+                        completion_tokens=analysis.token_usage.completion_tokens,
+                        total_tokens=analysis.token_usage.total_tokens,
+                        cost_usd=analysis.token_usage.estimated_cost_usd,
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "Error recording LLM telemetry for article '%s': %s",
+                        article.title,
+                        exc,
+                        exc_info=True,
+                    )
+
             # 3. Filtering & alert criteria (enforcing Hard Gate Decision Engine)
             alert_warranted = self.should_alert(analysis)
             alert_delivered = False
@@ -328,10 +347,17 @@ class Pipeline:
                     except TypeError:
                         articles = self.fetcher()
             else:
+                enable_etag = (
+                    self.settings.agent.enable_etag_cache
+                    if self.settings is not None and getattr(self.settings, "agent", None) is not None
+                    else True
+                )
                 articles = fetch_all_sources(
                     self.sources,
                     timeout=self.fetch_timeout,
                     max_items_per_source=batch_size,
+                    storage=self.storage,
+                    enable_etag_cache=enable_etag,
                 )
         except Exception as exc:
             logger.error("Critical error during source ingestion: %s", exc, exc_info=True)

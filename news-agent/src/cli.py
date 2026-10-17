@@ -335,5 +335,54 @@ def stats(
         storage.close()
 
 
+@app.command("metrics")
+def metrics(
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to settings.yaml"),
+    db: Optional[str] = typer.Option(None, "--db", help="Override SQLite database path"),
+) -> None:
+    """Display LLM observability telemetry, token consumption, expenditure, and monthly budget."""
+    settings = load_settings(config)
+    db_path = db or settings.agent.database_path
+
+    storage = SQLiteStorage(db_path)
+    try:
+        data = storage.get_metrics_summary()
+        total_calls = data.get("total_calls", 0)
+        prompt_tokens = data.get("total_prompt_tokens", 0)
+        completion_tokens = data.get("total_completion_tokens", 0)
+        total_tokens = data.get("total_tokens", 0)
+        total_cost = data.get("total_cost_usd", 0.0)
+        spend_month = data.get("spend_this_month", 0.0)
+        calls_by_model = data.get("calls_by_model", {})
+
+        monthly_budget = settings.llm.monthly_budget_usd
+        if monthly_budget is not None and monthly_budget > 0:
+            pct = (spend_month / monthly_budget) * 100
+            budget_str = f"${spend_month:.4f} / ${monthly_budget:.2f} ({pct:.1f}%)"
+        else:
+            budget_str = f"${spend_month:.4f} / Not Set"
+
+        table = Table(title=f"LLM Observability & Cost Metrics ({db_path})")
+        table.add_column("Metric", style="cyan")
+        table.add_column("Value", style="green bold")
+
+        table.add_row("Total LLM Inferences", f"{total_calls:,}")
+        table.add_row("Prompt Tokens", f"{prompt_tokens:,}")
+        table.add_row("Completion Tokens", f"{completion_tokens:,}")
+        table.add_row("Total Tokens", f"{total_tokens:,}")
+        table.add_row("Total Estimated Cost ($ USD)", f"${total_cost:.4f}")
+        table.add_row("Spend this Month vs Monthly Budget", budget_str)
+
+        if calls_by_model:
+            model_breakdown = ", ".join(f"{m}: {c}" for m, c in sorted(calls_by_model.items(), key=lambda x: -x[1]))
+        else:
+            model_breakdown = "None"
+        table.add_row("Calls by Model", model_breakdown)
+
+        console.print(table)
+    finally:
+        storage.close()
+
+
 if __name__ == "__main__":
     app()

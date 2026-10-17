@@ -745,5 +745,98 @@ def test_pipeline_opportunity_candidate_with_passing_hard_gates_alerts():
     mock_storage.record_article.assert_called_once_with(art, analysis, alerted=True)
 
 
+def test_pipeline_records_llm_metric_when_token_usage_present():
+    """Verify that pipeline records LLM metrics in storage whenever analysis.token_usage is present."""
+    mock_storage = MagicMock()
+    mock_analyzer = MagicMock()
+    mock_notifier = MagicMock()
+
+    art = RawArticle(
+        title="NVIDIA Reports Revenue",
+        url="https://example.com/nvda",
+        source_name="CNBC",
+    )
+    mock_storage.filter_unseen.return_value = [art]
+
+    from src.models import TokenUsage
+    analysis = MarketImpactAnalysis(
+        is_market_moving=False,
+        confidence_score=5,
+        impact_grade=ImpactGrade.AVERAGE,
+        summary="Routine revenue report.",
+        catalyst_thesis="In line with consensus.",
+        status=EventStatus.INFORMATIONAL,
+        token_usage=TokenUsage(
+            prompt_tokens=320,
+            completion_tokens=90,
+            total_tokens=410,
+            estimated_cost_usd=0.00015,
+            model_name="gemini/gemini-1.5-flash",
+        ),
+    )
+    mock_analyzer.analyze.return_value = analysis
+
+    pipeline = Pipeline(
+        storage=mock_storage,
+        analyzer=mock_analyzer,
+        notifier=mock_notifier,
+    )
+    summary = pipeline.process_articles([art])
+
+    assert summary.analyzed == 1
+    mock_storage.record_llm_metric.assert_called_once_with(
+        content_hash=art.content_hash,
+        model_name="gemini/gemini-1.5-flash",
+        prompt_tokens=320,
+        completion_tokens=90,
+        total_tokens=410,
+        cost_usd=0.00015,
+    )
+
+
+def test_cli_metrics_command(tmp_path):
+    """Verify CLI metrics command executes cleanly and outputs full Rich telemetry table."""
+    from typer.testing import CliRunner
+    from src.cli import app
+    from src.storage.sqlite import SQLiteStorage
+
+    db_file = tmp_path / "cli_metrics.db"
+    storage = SQLiteStorage(str(db_file))
+    storage.record_llm_metric(
+        content_hash="h1",
+        model_name="gemini/gemini-1.5-flash",
+        prompt_tokens=400,
+        completion_tokens=100,
+        total_tokens=500,
+        cost_usd=0.0001,
+    )
+    storage.record_llm_metric(
+        content_hash="h2",
+        model_name="gpt-4o-mini",
+        prompt_tokens=600,
+        completion_tokens=200,
+        total_tokens=800,
+        cost_usd=0.00025,
+    )
+    storage.close()
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["metrics", "--db", str(db_file)])
+
+    assert result.exit_code == 0
+    output = result.output
+    assert "LLM Observability & Cost Metrics" in output
+    assert "Total LLM Inferences" in output
+    assert "Prompt Tokens" in output
+    assert "Completion Tokens" in output
+    assert "Total Tokens" in output
+    assert "Total Estimated Cost ($ USD)" in output
+    assert "Spend this Month vs Monthly Budget" in output
+    assert "Calls by Model" in output
+    assert "gemini/gemini-1.5-flash" in output
+    assert "gpt-4o-mini" in output
+
+
+
 
 

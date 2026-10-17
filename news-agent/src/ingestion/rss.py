@@ -7,6 +7,7 @@ import re
 import socket
 from typing import Any, List, Optional
 import feedparser
+import requests
 
 try:
     from dateutil import parser as dateutil_parser
@@ -16,6 +17,7 @@ except ImportError:
 from src.config import SourceConfig
 from src.ingestion.base import BaseFetcher
 from src.models import RawArticle
+from src.storage.base import BaseStorage
 
 logger = logging.getLogger(__name__)
 
@@ -109,7 +111,7 @@ def parse_datetime(raw_date: Any, struct_time: Optional[Any] = None) -> Optional
 
 
 class RSSFetcher(BaseFetcher):
-    """Fetcher for RSS and Atom news feeds using feedparser."""
+    """Fetcher for RSS and Atom news feeds using feedparser and HTTP conditional caching."""
 
     def __init__(
         self,
@@ -117,11 +119,15 @@ class RSSFetcher(BaseFetcher):
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
         max_items: Optional[int] = None,
         user_agent: str = USER_AGENT,
+        storage: Optional[BaseStorage] = None,
+        enable_etag_cache: bool = True,
     ) -> None:
         super().__init__(source_config)
         self.user_agent = user_agent
         self.timeout = timeout
         self.max_items = max_items
+        self.storage = storage
+        self.enable_etag_cache = enable_etag_cache
 
     def fetch(self) -> List[RawArticle]:
         """Fetch and parse articles from the configured RSS/Atom feed.
@@ -132,24 +138,72 @@ class RSSFetcher(BaseFetcher):
         url = self.source_config.url
         logger.info("Fetching RSS feed for source '%s' from %s", self.source_config.name, url)
 
-        old_timeout = socket.getdefaulttimeout()
-        try:
-            socket.setdefaulttimeout(self.timeout)
-            parsed = feedparser.parse(
-                url,
-                agent=self.user_agent,
-                request_headers={"User-Agent": self.user_agent},
-            )
-        except Exception as exc:
-            logger.warning(
-                "Network or parser error fetching RSS feed '%s' (%s): %s",
-                self.source_config.name,
-                url,
-                exc,
-            )
-            return []
-        finally:
-            socket.setdefaulttimeout(old_timeout)
+        parsed = None
+
+        if (
+            self.storage is not None
+            and self.enable_etag_cache
+            and isinstance(url, str)
+            and url.startswith(("http://", "https://"))
+        ):
+            try:
+                cached_etag, cached_last_modified = self.storage.get_feed_cache(url)
+                headers = {"User-Agent": self.user_agent}
+                if cached_etag:
+                    headers["If-None-Match"] = cached_etag
+                if cached_last_modified:
+                    headers["If-Modified-Since"] = cached_last_modified
+
+                response = requests.get(url, headers=headers, timeout=self.timeout)
+
+                if response.status_code == 304:
+                    logger.debug(
+                        "Feed '%s' (%s) unchanged (HTTP 304 Not Modified); skipping parse.",
+                        self.source_config.name,
+                        url,
+                    )
+                    return []
+                elif response.status_code == 200:
+                    new_etag = response.headers.get("ETag")
+                    new_last_modified = response.headers.get("Last-Modified")
+                    parsed = feedparser.parse(response.content)
+                    if self.storage is not None:
+                        self.storage.set_feed_cache(url, new_etag, new_last_modified)
+                else:
+                    logger.warning(
+                        "HTTP error %d fetching RSS feed '%s' (%s)",
+                        response.status_code,
+                        self.source_config.name,
+                        url,
+                    )
+                    return []
+            except Exception as exc:
+                logger.warning(
+                    "Network or parser error fetching RSS feed '%s' (%s): %s",
+                    self.source_config.name,
+                    url,
+                    exc,
+                )
+                return []
+        else:
+            old_timeout = socket.getdefaulttimeout()
+            try:
+                socket.setdefaulttimeout(self.timeout)
+                parsed = feedparser.parse(
+                    url,
+                    agent=self.user_agent,
+                    request_headers={"User-Agent": self.user_agent},
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Network or parser error fetching RSS feed '%s' (%s): %s",
+                    self.source_config.name,
+                    url,
+                    exc,
+                )
+                return []
+            finally:
+                socket.setdefaulttimeout(old_timeout)
 
         if parsed is None:
             logger.warning("Feedparser returned None for '%s' (%s)", self.source_config.name, url)
@@ -313,6 +367,8 @@ def fetch_all_sources(
     sources: List[SourceConfig],
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     max_items_per_source: Optional[int] = None,
+    storage: Optional[BaseStorage] = None,
+    enable_etag_cache: bool = True,
 ) -> List[RawArticle]:
     """Fetch articles from all enabled sources with feed-level error containment.
 
@@ -324,6 +380,8 @@ def fetch_all_sources(
         sources: List of SourceConfig instances to poll.
         timeout: Socket timeout in seconds for feed requests.
         max_items_per_source: Optional maximum number of recent articles to ingest per feed.
+        storage: Optional BaseStorage instance for conditional ETag and Last-Modified caching.
+        enable_etag_cache: Whether to use HTTP conditional GET headers.
 
     Returns:
         List[RawArticle]: Aggregated list of raw articles from all successfully polled sources.
@@ -346,6 +404,8 @@ def fetch_all_sources(
                 source,
                 timeout=timeout,
                 max_items=max_items_per_source,
+                storage=storage,
+                enable_etag_cache=enable_etag_cache,
             )
             articles = fetcher.fetch()
             all_articles.extend(articles)
