@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from src.models import MarketImpactAnalysis, RawArticle
@@ -63,6 +64,28 @@ class BaseStorage(ABC):
     @abstractmethod
     def get_recent_catalysts(self, hours: int = 24) -> List[Dict[str, Any]]:
         """Retrieve recorded articles from the past `hours` where alerted=1 or status='OPPORTUNITY_CANDIDATE'."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def record_ticker_sentiment(
+        self,
+        ticker: str,
+        sentiment_score: float,
+        sentiment_label: str,
+        article_hash: str,
+        published_at: Optional[datetime] = None,
+    ) -> None:
+        """Record a sentiment history data point for a specific ticker."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_ticker_sentiment_window(self, ticker: str, hours: int = 24) -> List[Dict[str, Any]]:
+        """Retrieve sentiment history records for a ticker within the past `hours`."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_all_tickers_trend_summary(self, hours: int = 24) -> List[Dict[str, Any]]:
+        """Return aggregate sentiment trend summaries across all tickers in the past `hours`."""
         raise NotImplementedError
 
 

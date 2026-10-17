@@ -75,6 +75,12 @@ class TelegramSettings(BaseModel):
         s = str(v).strip()
         return s if s else None
 
+    @property
+    def is_configured(self) -> bool:
+        """Return True if both bot_token and chat_id are present."""
+        return bool(self.bot_token and self.chat_id)
+
+
 
 class Settings(BaseModel):
     """Root application settings schema."""

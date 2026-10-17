@@ -65,7 +65,24 @@ class SQLiteStorage(BaseStorage):
                         corroborating_sources TEXT,
                         corroboration_count INTEGER DEFAULT 1,
                         sec_filing_item TEXT,
-                        surge_level TEXT
+                        surge_level TEXT,
+                        sentiment_score REAL,
+                        sentiment_label TEXT,
+                        buzz_ratio REAL,
+                        trend_verdict TEXT
+                    );
+                    """
+                )
+                self._conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS ticker_sentiment_history (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        ticker TEXT NOT NULL,
+                        sentiment_score REAL NOT NULL,
+                        sentiment_label TEXT NOT NULL,
+                        article_hash TEXT NOT NULL,
+                        published_at TIMESTAMP,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     );
                     """
                 )
@@ -109,6 +126,10 @@ class SQLiteStorage(BaseStorage):
                     ("corroboration_count", "INTEGER"),
                     ("sec_filing_item", "TEXT"),
                     ("surge_level", "TEXT"),
+                    ("sentiment_score", "REAL"),
+                    ("sentiment_label", "TEXT"),
+                    ("buzz_ratio", "REAL"),
+                    ("trend_verdict", "TEXT"),
                 ]
                 for col_name, col_type in new_columns:
                     if col_name not in existing_cols:
@@ -119,6 +140,8 @@ class SQLiteStorage(BaseStorage):
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_articles_created_at ON articles(created_at);")
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_articles_status ON articles(status);")
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_articles_surge_level ON articles(surge_level);")
+                self._conn.execute("CREATE INDEX IF NOT EXISTS idx_ticker_sentiment_ticker_created_at ON ticker_sentiment_history(ticker, created_at);")
+                self._conn.execute("CREATE INDEX IF NOT EXISTS idx_ticker_sentiment_created_at ON ticker_sentiment_history(created_at);")
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_metrics_created_at ON llm_metrics(created_at);")
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_metrics_content_hash ON llm_metrics(content_hash);")
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_metrics_model_name ON llm_metrics(model_name);")
@@ -253,6 +276,26 @@ class SQLiteStorage(BaseStorage):
             if analysis and analysis.surge_level is not None
             else None
         )
+        sentiment_score = None
+        sentiment_label = None
+        buzz_ratio = None
+        trend_verdict = None
+
+        if analysis and analysis.sentiment is not None:
+            sentiment_score = float(analysis.sentiment.score)
+            sentiment_label = (
+                analysis.sentiment.label.value
+                if hasattr(analysis.sentiment.label, "value")
+                else str(analysis.sentiment.label)
+            )
+
+        if analysis and analysis.trend is not None:
+            buzz_ratio = float(analysis.trend.buzz_ratio)
+            trend_verdict = (
+                analysis.trend.trend_verdict.value
+                if hasattr(analysis.trend.trend_verdict, "value")
+                else str(analysis.trend.trend_verdict)
+            )
 
         sql = """
         INSERT INTO articles (
@@ -279,8 +322,12 @@ class SQLiteStorage(BaseStorage):
             corroborating_sources,
             corroboration_count,
             sec_filing_item,
-            surge_level
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            surge_level,
+            sentiment_score,
+            sentiment_label,
+            buzz_ratio,
+            trend_verdict
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(content_hash) DO UPDATE SET
             url = excluded.url,
             title = excluded.title,
@@ -303,7 +350,11 @@ class SQLiteStorage(BaseStorage):
             corroborating_sources = COALESCE(excluded.corroborating_sources, articles.corroborating_sources),
             corroboration_count = COALESCE(excluded.corroboration_count, articles.corroboration_count),
             sec_filing_item = COALESCE(excluded.sec_filing_item, articles.sec_filing_item),
-            surge_level = COALESCE(excluded.surge_level, articles.surge_level)
+            surge_level = COALESCE(excluded.surge_level, articles.surge_level),
+            sentiment_score = COALESCE(excluded.sentiment_score, articles.sentiment_score),
+            sentiment_label = COALESCE(excluded.sentiment_label, articles.sentiment_label),
+            buzz_ratio = COALESCE(excluded.buzz_ratio, articles.buzz_ratio),
+            trend_verdict = COALESCE(excluded.trend_verdict, articles.trend_verdict)
         """
         with self._lock:
             if self._conn is None:
@@ -336,8 +387,31 @@ class SQLiteStorage(BaseStorage):
                         corroboration_count,
                         sec_filing_item,
                         surge_level,
+                        sentiment_score,
+                        sentiment_label,
+                        buzz_ratio,
+                        trend_verdict,
                     ),
                 )
+                if analysis and analysis.affected_tickers and analysis.sentiment is not None:
+                    for ticker in analysis.affected_tickers:
+                        cleaned_ticker = str(ticker).strip().upper()
+                        if cleaned_ticker:
+                            self._conn.execute(
+                                """
+                                INSERT INTO ticker_sentiment_history (
+                                    ticker, sentiment_score, sentiment_label, article_hash, published_at, created_at
+                                ) VALUES (?, ?, ?, ?, ?, ?)
+                                """,
+                                (
+                                    cleaned_ticker,
+                                    sentiment_score,
+                                    sentiment_label,
+                                    article.content_hash,
+                                    published_at_str,
+                                    created_at_str,
+                                ),
+                            )
 
     def get_stats(self) -> Dict[str, int]:
         """Return aggregate storage statistics: total_articles, alerted_count, market_moving_count."""
@@ -552,6 +626,135 @@ class SQLiteStorage(BaseStorage):
                 else:
                     col_names = [col[0] for col in cursor.description]
                     results.append(dict(zip(col_names, r)))
+            return results
+
+    def record_ticker_sentiment(
+        self,
+        ticker: str,
+        sentiment_score: float,
+        sentiment_label: str,
+        article_hash: str,
+        published_at: Optional[datetime] = None,
+    ) -> None:
+        """Record a sentiment history data point for a specific ticker."""
+        if not ticker:
+            return
+        published_at_str = published_at.isoformat() if published_at else None
+        created_at_str = datetime.now(timezone.utc).isoformat()
+        cleaned_ticker = str(ticker).strip().upper()
+        label_str = sentiment_label.value if hasattr(sentiment_label, "value") else str(sentiment_label)
+
+        with self._lock:
+            if self._conn is None:
+                raise RuntimeError("Database connection is closed.")
+            with self._conn:
+                self._conn.execute(
+                    """
+                    INSERT INTO ticker_sentiment_history (
+                        ticker, sentiment_score, sentiment_label, article_hash, published_at, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        cleaned_ticker,
+                        float(sentiment_score),
+                        label_str,
+                        article_hash,
+                        published_at_str,
+                        created_at_str,
+                    ),
+                )
+
+    def get_ticker_sentiment_window(self, ticker: str, hours: int = 24) -> List[Dict[str, Any]]:
+        """Retrieve sentiment history records for a ticker within the past `hours`."""
+        if not ticker:
+            return []
+        cutoff_dt = datetime.now(timezone.utc) - timedelta(hours=hours)
+        cutoff_iso = cutoff_dt.isoformat()
+        cleaned_ticker = str(ticker).strip().upper()
+
+        candidates = [cleaned_ticker]
+        if cleaned_ticker.startswith("$"):
+            candidates.append(cleaned_ticker[1:])
+        else:
+            candidates.append(f"${cleaned_ticker}")
+
+        sql = """
+        SELECT
+            id,
+            ticker,
+            sentiment_score,
+            sentiment_label,
+            article_hash,
+            published_at,
+            created_at
+        FROM ticker_sentiment_history
+        WHERE (ticker = ? OR ticker = ?)
+          AND COALESCE(published_at, created_at) >= ?
+        ORDER BY COALESCE(published_at, created_at) DESC, id DESC;
+        """
+        with self._lock:
+            if self._conn is None:
+                raise RuntimeError("Database connection is closed.")
+            cursor = self._conn.cursor()
+            cursor.execute(sql, (candidates[0], candidates[1], cutoff_iso))
+
+            rows = cursor.fetchall()
+            results: List[Dict[str, Any]] = []
+            for r in rows:
+                if isinstance(r, sqlite3.Row):
+                    results.append(dict(r))
+                else:
+                    col_names = [col[0] for col in cursor.description]
+                    results.append(dict(zip(col_names, r)))
+            return results
+
+    def get_all_tickers_trend_summary(self, hours: int = 24) -> List[Dict[str, Any]]:
+        """Return aggregate sentiment trend summaries across all tickers in the past `hours`."""
+        cutoff_dt = datetime.now(timezone.utc) - timedelta(hours=hours)
+        cutoff_iso = cutoff_dt.isoformat()
+
+        sql = """
+        SELECT
+            ticker,
+            AVG(sentiment_score) AS avg_sentiment,
+            COUNT(*) AS total_articles
+        FROM ticker_sentiment_history
+        WHERE (created_at >= ? OR (published_at IS NOT NULL AND published_at >= ?))
+        GROUP BY ticker
+        ORDER BY total_articles DESC, avg_sentiment DESC;
+        """
+        with self._lock:
+            if self._conn is None:
+                raise RuntimeError("Database connection is closed.")
+            cursor = self._conn.cursor()
+            cursor.execute(sql, (cutoff_iso, cutoff_iso))
+            rows = cursor.fetchall()
+            results: List[Dict[str, Any]] = []
+            for r in rows:
+                row_dict = dict(r) if isinstance(r, sqlite3.Row) else {
+                    "ticker": r[0],
+                    "avg_sentiment": r[1],
+                    "total_articles": r[2],
+                }
+                avg_val = float(row_dict["avg_sentiment"]) if row_dict["avg_sentiment"] is not None else 0.0
+
+                if avg_val >= 0.5:
+                    label = "VERY_BULLISH"
+                elif avg_val >= 0.15:
+                    label = "BULLISH"
+                elif avg_val <= -0.5:
+                    label = "VERY_BEARISH"
+                elif avg_val <= -0.15:
+                    label = "BEARISH"
+                else:
+                    label = "NEUTRAL"
+
+                results.append({
+                    "ticker": row_dict["ticker"],
+                    "avg_sentiment": round(avg_val, 4),
+                    "total_articles": int(row_dict["total_articles"]),
+                    "sentiment_label": label,
+                })
             return results
 
     def close(self) -> None:

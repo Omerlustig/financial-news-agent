@@ -5,6 +5,8 @@ from src.models import RawArticle, MarketImpactAnalysis, ImpactGrade, EventStatu
 from src.pipeline import Pipeline, CycleSummary
 from src.analysis.analyzer import AnalysisError
 from src.config import Settings, FilterSettings
+from src.notification.console import ConsoleNotifier
+
 
 
 def test_pipeline_filters_below_threshold():
@@ -371,6 +373,20 @@ def test_pipeline_from_settings(tmp_path):
     assert pipeline.storage is not None
     assert pipeline.notifier.bot_token == "token123"
     pipeline.close()
+
+
+def test_pipeline_from_settings_unconfigured_telegram_falls_back_to_console(tmp_path):
+    """Verify Pipeline defaults to ConsoleNotifier when Telegram credentials are unconfigured."""
+    db_file = tmp_path / "test_local.db"
+    settings = Settings.model_validate({
+        "agent": {"database_path": str(db_file), "polling_interval_minutes": 5},
+        "filter": {"min_confidence_score": 6},
+        "telegram": {"bot_token": "", "chat_id": ""},
+    })
+    pipeline = Pipeline.from_settings(settings=settings, sources=[])
+    assert isinstance(pipeline.notifier, ConsoleNotifier)
+    pipeline.close()
+
 
 
 def test_pipeline_context_manager():

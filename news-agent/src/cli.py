@@ -19,10 +19,14 @@ if str(news_agent_root) not in sys.path:
 
 from src.config import load_settings, load_sources, Settings
 from src.ingestion.rss import RSSFetcher
-from src.notification.telegram import TelegramNotifier
+from src.notification.telegram import TelegramNotifier, format_sentiment_gauge
+from src.notification.console import ConsoleNotifier
 from src.pipeline import Pipeline
 from src.storage.sqlite import SQLiteStorage
 from src.analysis.digest import MarketDigestGenerator
+from src.analysis.trend import TrendEngine
+from src.models import RawArticle, MarketImpactAnalysis, ImpactGrade
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -162,8 +166,25 @@ def test_telegram(
 
     if not bot_token or not chat_id:
         console.print("[bold red]Telegram credentials missing![/bold red]")
+        console.print("[yellow][LOCAL MODE][/yellow] Telegram credentials not configured. Printing preview alert to console:")
+        sample_article = RawArticle(
+            title="Sample Local Market Moving Catalyst",
+            url="https://example.com/local-test",
+            source_name="LocalFeed",
+        )
+        sample_analysis = MarketImpactAnalysis(
+            is_market_moving=True,
+            confidence_score=9,
+            impact_grade=ImpactGrade.CRITICAL,
+            affected_tickers=["$AAPL"],
+            affected_sectors=["Technology"],
+            summary="Local mode execution test alert preview.",
+            catalyst_thesis="Testing local terminal notification delivery.",
+        )
+        ConsoleNotifier(console=console).send_alert(sample_article, sample_analysis)
         console.print("Please configure 'TELEGRAM_BOT_TOKEN' and 'TELEGRAM_CHAT_ID' in environment or config/settings.yaml.")
         raise typer.Exit(code=1)
+
 
     console.print(f"Connecting to Telegram bot (chat_id: {chat_id})...")
     notifier = TelegramNotifier(bot_token=bot_token, chat_id=chat_id)
@@ -422,6 +443,92 @@ def digest(
         storage.close()
 
 
+@app.command("scanner")
+def scanner(
+    hours: int = typer.Option(24, "--hours", "-h", help="Lookback window in hours"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to settings.yaml"),
+    db: Optional[str] = typer.Option(None, "--db", help="Override SQLite database path"),
+) -> None:
+    """Display real-time market sentiment and buzz trend scanner dashboard."""
+    settings = load_settings(config)
+    db_path = db or settings.agent.database_path
+
+    storage = SQLiteStorage(db_path)
+    try:
+        summary_list = storage.get_all_tickers_trend_summary(hours=hours)
+        if not summary_list:
+            console.print(f"[yellow]No ticker sentiment records found in the past {hours} hours.[/yellow]")
+            return
+
+        table = Table(title=f"Real-Time Market Scanner ({hours}h Window)")
+        table.add_column("Ticker", style="cyan bold")
+        table.add_column("24h Articles", justify="center")
+        table.add_column("Buzz Multiplier", justify="center")
+        table.add_column("Sentiment Score", justify="right")
+        table.add_column("Sentiment Gauge", justify="center")
+        table.add_column("Velocity", justify="right")
+        table.add_column("Trend Verdict", justify="left")
+
+        trend_engine = TrendEngine()
+        for item in summary_list:
+            ticker = item["ticker"]
+            avg_sentiment = float(item["avg_sentiment"])
+
+            trend = trend_engine.calculate_ticker_trend(storage, ticker, current_sentiment=None)
+
+            buzz = trend.buzz_ratio
+            if buzz >= 1.5:
+                buzz_str = f"🔥 {buzz:.1f}x"
+            else:
+                buzz_str = f"{buzz:.1f}x"
+
+            if avg_sentiment > 0.05:
+                score_str = f"[green]{avg_sentiment:+.2f}[/green]"
+            elif avg_sentiment < -0.05:
+                score_str = f"[red]{avg_sentiment:+.2f}[/red]"
+            else:
+                score_str = f"[white]{avg_sentiment:+.2f}[/white]"
+
+            gauge_str = format_sentiment_gauge(avg_sentiment, width=10)
+
+            vel = trend.sentiment_velocity
+            if vel > 0:
+                vel_str = f"[green]{vel:+.2f}[/green]"
+            elif vel < 0:
+                vel_str = f"[red]{vel:+.2f}[/red]"
+            else:
+                vel_str = f"[white]{vel:+.2f}[/white]"
+
+            verdict_val = (
+                trend.trend_verdict.value
+                if hasattr(trend.trend_verdict, "value")
+                else str(trend.trend_verdict)
+            )
+            if "BULLISH" in verdict_val:
+                verdict_str = f"[bold green]{verdict_val}[/bold green]"
+            elif "BEAR" in verdict_val or "PANIC" in verdict_val:
+                verdict_str = f"[bold red]{verdict_val}[/bold red]"
+            else:
+                verdict_str = f"[yellow]{verdict_val}[/yellow]"
+
+            table.add_row(
+                ticker,
+                str(trend.articles_24h_count),
+                buzz_str,
+                score_str,
+                gauge_str,
+                vel_str,
+                verdict_str,
+            )
+
+        console.print()
+        console.print(table)
+        console.print()
+    finally:
+        storage.close()
+
+
 if __name__ == "__main__":
     app()
+
 

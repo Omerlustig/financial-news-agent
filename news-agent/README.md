@@ -122,6 +122,9 @@ python -m src.main run-once
 > python -m src.main run-once --alert-on-all
 > ```
 
+> **Local Mode (No Telegram Setup Required)**:
+> If you have not configured `TELEGRAM_BOT_TOKEN` or `TELEGRAM_CHAT_ID` yet, the agent automatically activates **Local Mode** via `ConsoleNotifier`. Market catalyst alerts, sentiment meters, buzz scores, and trend verdicts will be printed directly to your terminal inside formatted Rich panels. You can test and run immediately without registering a Telegram bot!
+
 ### 6. Run Continuous Monitoring Daemon
 Launch the autonomous background monitoring daemon with a 15-minute polling loop:
 ```bash
@@ -507,6 +510,7 @@ The agent includes full diagnostic utilities for real-time inspection and verifi
 | `python -m src.main metrics` | Displays total LLM inference counts, tokens, estimated spend, and model breakdown. |
 | `python -m src.main digest --hours 24` | Generates a 24-hour sector-grouped catalyst executive digest to the console. |
 | `python -m src.main digest --hours 24 --send-telegram` | Generates and broadcasts the 24-hour catalyst briefing directly to Telegram. |
+| `python -m src.main scanner --hours 24` | Real-time terminal market scanner showing ticker buzz multipliers, sentiment gauges, velocities, and trend verdicts. |
 
 ---
 

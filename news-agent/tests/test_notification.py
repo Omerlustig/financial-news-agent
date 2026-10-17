@@ -14,14 +14,21 @@ from src.models import (
     HardGates,
     SurgeLevel,
     SECFilingItem,
+    SentimentLabel,
+    SentimentScore,
+    TrendMetrics,
+    TrendVerdict,
 )
 
 from src.notification.base import BaseNotifier
 from src.notification.telegram import (
     TelegramNotifier,
     format_telegram_message,
+    format_sentiment_gauge,
     escape_html,
 )
+from src.notification.console import ConsoleNotifier
+
 
 
 def test_base_notifier_cannot_be_instantiated():
@@ -642,6 +649,143 @@ def test_telegram_send_message_with_reply_markup():
         _, kwargs = mock_post.call_args
         payload = kwargs.get("json", {})
         assert payload.get("reply_markup") == markup
+
+
+def test_format_sentiment_gauge_values():
+    """Verify format_sentiment_gauge handles positive, negative, zero, and boundary clamp values."""
+    # Positive
+    gauge_pos = format_sentiment_gauge(0.70, width=10)
+    assert gauge_pos == "[🟩🟩🟩🟩🟩🟩🟩⬜⬜⬜] (+0.70)"
+
+    # Negative
+    gauge_neg = format_sentiment_gauge(-0.50, width=10)
+    assert gauge_neg == "[🟥🟥🟥🟥🟥⬜⬜⬜⬜⬜] (-0.50)"
+
+    # Zero
+    gauge_zero = format_sentiment_gauge(0.0, width=10)
+    assert gauge_zero == "[⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜] (0.00)"
+
+    # Boundary clamps
+    gauge_upper = format_sentiment_gauge(1.5, width=10)
+    assert gauge_upper == "[🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩] (+1.00)"
+
+    gauge_lower = format_sentiment_gauge(-2.0, width=10)
+    assert gauge_lower == "[🟥🟥🟥🟥🟥🟥🟥🟥🟥🟥] (-1.00)"
+
+
+def test_format_telegram_message_with_sentiment_and_trend():
+    """Verify format_telegram_message includes visual sentiment gauge, news buzz, and trend verdict."""
+    article = RawArticle(
+        title="Nvidia Reports Historic Datacenter Revenue Growth",
+        url="https://reuters.com/nvda-earnings",
+        source_name="Reuters",
+    )
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=9,
+        impact_grade=ImpactGrade.CRITICAL,
+        affected_tickers=["$NVDA"],
+        affected_sectors=["Semiconductors"],
+        summary="Nvidia Blackwell revenue surged 200%.",
+        catalyst_thesis="Accelerating AI demand expanding margins.",
+        sentiment=SentimentScore(score=0.85, label=SentimentLabel.VERY_BULLISH),
+        trend=TrendMetrics(
+            buzz_ratio=3.2,
+            sentiment_velocity=0.45,
+            trend_verdict=TrendVerdict.STRONG_BULLISH,
+            articles_24h_count=18,
+        ),
+    )
+
+    msg = format_telegram_message(article, analysis)
+
+    # Sentiment Line
+    assert "📊 <b>Sentiment:</b> 🚀 VERY BULLISH | [🟩🟩🟩🟩🟩🟩🟩🟩⬜⬜] (+0.85)" in msg
+
+
+    # Buzz Line
+    assert "🔥 <b>News Buzz:</b> 3.2x (24h Articles: 18)" in msg
+
+    # Trend Verdict Line
+    assert "📈 <b>Trend Verdict:</b> STRONG_BULLISH (Velocity: +0.45)" in msg
+
+
+def test_console_notifier_send_alert_and_message():
+    """Verify ConsoleNotifier prints formatted alerts and messages cleanly to console."""
+    from rich.console import Console
+    import io
+
+    output_stream = io.StringIO()
+    test_console = Console(file=output_stream, force_terminal=True, width=120)
+    notifier = ConsoleNotifier(console=test_console)
+
+    article = RawArticle(
+        title="Broadcom Inks AI Infrastructure Pact",
+        url="https://example.com/avgo-deal",
+        source_name="Bloomberg",
+    )
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=9,
+        impact_grade=ImpactGrade.HIGH,
+        affected_tickers=["$AVGO"],
+        affected_sectors=["Semiconductors"],
+        summary="Broadcom expands enterprise ASIC agreements.",
+        catalyst_thesis="High margin custom silicon growth.",
+        sentiment=SentimentScore(score=0.60, label=SentimentLabel.BULLISH),
+        trend=TrendMetrics(
+            buzz_ratio=2.0,
+            sentiment_velocity=0.15,
+            trend_verdict=TrendVerdict.STRONG_BULLISH,
+            articles_24h_count=5,
+        ),
+    )
+
+    # 1. Test send_alert
+    success = notifier.send_alert(article, analysis)
+    assert success is True
+    alert_output = output_stream.getvalue()
+    assert "Broadcom Inks AI Infrastructure Pact" in alert_output
+    assert "OPPORTUNITY CANDIDATE" in alert_output
+    assert "$AVGO" in alert_output
+    assert "ConsoleNotifier (Local Mode)" in alert_output
+
+    # 2. Test send_message
+    msg_success = notifier.send_message("<b>Market Update:</b> Pipeline operational.")
+    assert msg_success is True
+    assert "Market Update: Pipeline operational." in output_stream.getvalue()
+
+
+def test_telegram_notifier_fallback_to_console():
+    """Verify TelegramNotifier delegates to ConsoleNotifier when unconfigured and fallback_to_console=True."""
+    notifier = TelegramNotifier(fallback_to_console=True)
+    assert not notifier.is_configured
+
+    article = RawArticle(
+        title="Local Mode Test Headline",
+        url="https://example.com/test",
+        source_name="TestFeed",
+    )
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=8,
+        impact_grade=ImpactGrade.HIGH,
+        affected_tickers=["$AAPL"],
+        affected_sectors=["Technology"],
+        summary="Local mode test.",
+        catalyst_thesis="Local hypothesis.",
+    )
+
+    with patch("src.notification.console.ConsoleNotifier.send_alert", return_value=True) as mock_alert:
+        ok = notifier.send_alert(article, analysis)
+        assert ok is True
+        mock_alert.assert_called_once_with(article, analysis)
+
+    with patch("src.notification.console.ConsoleNotifier.send_message", return_value=True) as mock_msg:
+        ok = notifier.send_message("Hello from local")
+        assert ok is True
+        mock_msg.assert_called_once()
+
 
 
 

@@ -10,8 +10,11 @@ from src.storage.sqlite import SQLiteStorage
 from src.analysis.analyzer import MarketImpactAnalyzer
 from src.analysis.corroborator import EventCorroborator
 from src.analysis.surge import SurgeVelocityEngine
+from src.analysis.trend import TrendEngine
 from src.notification.base import BaseNotifier
 from src.notification.telegram import TelegramNotifier
+from src.notification.console import ConsoleNotifier
+
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +71,7 @@ class Pipeline:
         notifier: Optional[BaseNotifier] = None,
         corroborator: Optional[EventCorroborator] = None,
         surge_engine: Optional[SurgeVelocityEngine] = None,
+        trend_engine: Optional[TrendEngine] = None,
         sources: Optional[List[SourceConfig]] = None,
         fetcher: Optional[Callable[[], List[RawArticle]]] = None,
         min_score: Optional[int] = None,
@@ -82,6 +86,7 @@ class Pipeline:
         self.fetcher = fetcher
         self.corroborator = corroborator if corroborator is not None else EventCorroborator()
         self.surge_engine = surge_engine if surge_engine is not None else SurgeVelocityEngine()
+        self.trend_engine = trend_engine if trend_engine is not None else TrendEngine()
 
 
         # Threshold resolution: min_score takes precedence over min_confidence_score
@@ -141,12 +146,17 @@ class Pipeline:
         if notifier is not None:
             self.notifier = notifier
         elif settings is not None:
-            self.notifier = TelegramNotifier(
-                bot_token=settings.telegram.bot_token,
-                chat_id=settings.telegram.chat_id,
-            )
+            if not getattr(settings.telegram, "is_configured", False):
+                logger.info("[LOCAL MODE] Telegram not configured - using ConsoleNotifier (alerts will print to terminal).")
+                self.notifier = ConsoleNotifier()
+            else:
+                self.notifier = TelegramNotifier(
+                    bot_token=settings.telegram.bot_token,
+                    chat_id=settings.telegram.chat_id,
+                )
         else:
-            self.notifier = TelegramNotifier()
+            self.notifier = ConsoleNotifier()
+
 
     @classmethod
     def from_settings(
@@ -275,6 +285,17 @@ class Pipeline:
             # Apply surge velocity detection
             surge_level = self.surge_engine.detect_surge(cluster)
             analysis = self.surge_engine.apply_surge_metadata(analysis, surge_level)
+
+            # Enrich analysis with market trend & buzz metrics
+            if self.storage is not None and self.trend_engine is not None:
+                try:
+                    analysis = self.trend_engine.enrich_analysis_with_trend(self.storage, analysis)
+                except Exception as exc:
+                    logger.warning(
+                        "Error enriching analysis with trend metrics for '%s': %s",
+                        canonical.title,
+                        exc,
+                    )
 
             # Record LLM observability and token usage telemetry
             if analysis.token_usage is not None and self.storage is not None:

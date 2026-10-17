@@ -21,6 +21,8 @@ from src.config import LLMSettings
 from src.storage.base import BaseStorage
 from src.analysis.prompts import build_analyst_prompt, filter_valid_tickers
 from src.analysis.taxonomy import SECTaxonomyClassifier
+from src.analysis.sentiment import FinancialSentimentEngine
+
 
 
 logger = logging.getLogger(__name__)
@@ -93,6 +95,8 @@ class MarketImpactAnalyzer:
         self.retry_delay = retry_delay
         self.backoff_factor = backoff_factor
         self.fallback_on_error = fallback_on_error
+        self.sentiment_engine = FinancialSentimentEngine()
+
 
     def analyze(self, article: RawArticle) -> MarketImpactAnalysis:
         """Analyzes an article using litellm with failover to fallback_model and exponential backoff retries."""
@@ -130,6 +134,14 @@ class MarketImpactAnalyzer:
                     )
                     raw_content = self._extract_content(response)
                     analysis = self._parse_and_validate(raw_content, article)
+
+                    # Calibrate sentiment using domain financial sentiment engine
+                    analysis.sentiment = self.sentiment_engine.calibrate_sentiment(
+                        text=f"{article.title} {article.summary or ''}".strip(),
+                        llm_sentiment=analysis.sentiment,
+                    )
+
+
 
                     # Observability & Token Telemetry Extraction
                     usage = getattr(response, "usage", None)
@@ -321,5 +333,9 @@ class MarketImpactAnalyzer:
                 has_direct_exposure=False,
                 passes_all_gates=False,
             ),
+            sentiment=self.sentiment_engine.calibrate_sentiment(
+                text=f"{article.title} {article.summary or ''}".strip()
+            ),
             disclaimer="⚠️ News-derived hypothesis. Market pricing, valuation, and entry points were not checked.",
         )
+

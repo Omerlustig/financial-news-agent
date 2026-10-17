@@ -123,6 +123,18 @@ CALIBRATED CONFIDENCE SCORING & IMPACT GRADING:
 - HIGH (Score 7-8): Substantial earnings surprise + forward guidance revisions, significant regulatory enforcement/subpoenas, sector-wide supply bottlenecks, large M&A deals ($1B+). 'is_market_moving' MUST BE true. Status: OPPORTUNITY_CANDIDATE (if gates pass) or WATCHLIST.
 - CRITICAL (Score 9-10): Emergency interest rate moves, landmark antitrust breakup rulings, multi-billion surprise hostile takeover, sweeping national export bans on core technology, sudden geopolitical trade blockade. 'is_market_moving' MUST BE true. Status: OPPORTUNITY_CANDIDATE (if gates pass).
 
+FINANCIAL SENTIMENT ANALYSIS (LOUGHRAN-MCDONALD & CATALYST POLARITY):
+Evaluate domain-specific financial sentiment across headline, corporate disclosures, and catalyst mechanism:
+- Calculate continuous compound `score` from -1.0 (extreme bearish) to +1.0 (extreme bullish).
+- Categorize `label` based on calibrated score thresholds:
+  * score >= 0.6: "VERY_BULLISH"
+  * 0.15 <= score < 0.6: "BULLISH"
+  * -0.15 <= score < 0.15: "NEUTRAL"
+  * -0.6 < score <= -0.15: "BEARISH"
+  * score <= -0.6: "VERY_BEARISH"
+- Derive probabilistic distribution: `positive` (0.0 to 1.0), `negative` (0.0 to 1.0), `neutral` (0.0 to 1.0), and `confidence` (0.0 to 1.0).
+- Extreme events (accounting restatement / Item 4.02, fraud, bankruptcy, default) MUST be scored <= -0.8 ("VERY_BEARISH").
+
 COMPLIANCE & NEWS-ONLY BOUNDARY:
 - Outputs are news-derived hypotheses only.
 - Never state that a stock is mispriced, never identify entry points, price targets, or trading recommendations without approved market data.
@@ -156,10 +168,19 @@ Respond with pure JSON conforming strictly to this schema:
     "has_direct_exposure": boolean,
     "passes_all_gates": boolean
   },
+  "sentiment": {
+    "score": float (-1.0 to 1.0),
+    "label": "VERY_BEARISH" | "BEARISH" | "NEUTRAL" | "BULLISH" | "VERY_BULLISH",
+    "positive": float (0.0 to 1.0),
+    "negative": float (0.0 to 1.0),
+    "neutral": float (0.0 to 1.0),
+    "confidence": float (0.0 to 1.0)
+  },
   "sec_filing_item": "Item 1.01: Entry into Material Definitive Agreement (M&A / Partnership)" | null,
   "recommendation": "Concise 1-sentence actionable analyst recommendation or monitoring posture (e.g. 'Prioritize long exposure on $NVDA/$TSM on dips; hedge downside risk via $SMH puts; avoid $INTC until next quarter').",
   "disclaimer": "⚠️ News-derived hypothesis. Market pricing, valuation, and entry points were not checked."
 }
+
 """
 
 
@@ -209,7 +230,9 @@ EVALUATION INSTRUCTIONS:
 5. Balanced Debate: Identify beneficiaries ($TICKER), negatively exposed ($TICKER), counterarguments, and invalidation conditions.
 6. Multi-language: For Hebrew headlines/content (e.g., Globes, Calcalist, TheMarker, MAYA, TASE), accurately parse Israeli entities and normalize all JSON outputs to English.
 7. Regulatory Taxonomy: If SEC 8-K filing items or MAYA disclosure categories are present or detected above, calibrate baseline severity accordingly and explicitly set 'sec_filing_item'.
+8. Financial Sentiment: Evaluate domain financial tone (Loughran-McDonald lexicon and catalyst polarity) and populate 'sentiment' with calibrated score (-1.0 to 1.0), categorical label, positive/negative/neutral probabilities, and confidence.
 
 Return ONLY valid JSON adhering strictly to the required MarketImpactAnalysis schema.
+
 """
     return SYSTEM_ANALYST_PROMPT, user_prompt

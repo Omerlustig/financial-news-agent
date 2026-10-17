@@ -137,6 +137,49 @@ class SurgeLevel(str, Enum):
         return super()._missing_(value)
 
 
+class SentimentLabel(str, Enum):
+    """Categorical directional sentiment polarity."""
+    VERY_BEARISH = "VERY_BEARISH"
+    BEARISH = "BEARISH"
+    NEUTRAL = "NEUTRAL"
+    BULLISH = "BULLISH"
+    VERY_BULLISH = "VERY_BULLISH"
+
+    def __str__(self) -> str:
+        return self.value
+
+    @classmethod
+    def _missing_(cls, value: object) -> Any:
+        if isinstance(value, str):
+            normalized = value.strip().upper().replace(" ", "_")
+            for member in cls:
+                if member.value == normalized:
+                    return member
+        return super()._missing_(value)
+
+
+class TrendVerdict(str, Enum):
+    """Multi-horizon momentum and market sentiment trend verdict."""
+    STRONG_BULLISH = "STRONG_BULLISH"
+    MODERATE_BULLISH = "MODERATE_BULLISH"
+    NEUTRAL_CONSOLIDATION = "NEUTRAL_CONSOLIDATION"
+    MODERATE_BEARISH = "MODERATE_BEARISH"
+    PANIC_CAPITULATION = "PANIC_CAPITULATION"
+
+    def __str__(self) -> str:
+        return self.value
+
+    @classmethod
+    def _missing_(cls, value: object) -> Any:
+        if isinstance(value, str):
+            normalized = value.strip().upper().replace(" ", "_")
+            for member in cls:
+                if member.value == normalized:
+                    return member
+        return super()._missing_(value)
+
+
+
 import urllib.parse
 
 TRACKING_QUERY_PARAMS = {
@@ -266,6 +309,46 @@ class TokenUsage(BaseModel):
     model_name: str = Field(default="", description="Identifier of the model used.")
 
 
+class SentimentScore(BaseModel):
+    """Compound sentiment polarity score and probabilistic distribution."""
+    score: float = Field(default=0.0, ge=-1.0, le=1.0, description="Compound sentiment score from -1.0 (extreme bearish) to +1.0 (extreme bullish)")
+    label: SentimentLabel = Field(default=SentimentLabel.NEUTRAL)
+    positive: float = Field(default=0.0, ge=0.0, le=1.0)
+    negative: float = Field(default=0.0, ge=0.0, le=1.0)
+    neutral: float = Field(default=1.0, ge=0.0, le=1.0)
+    confidence: float = Field(default=0.8, ge=0.0, le=1.0)
+
+    @field_validator("label", mode="before")
+    @classmethod
+    def normalize_label(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            cleaned = v.strip().upper().replace(" ", "_")
+            try:
+                return SentimentLabel(cleaned)
+            except ValueError:
+                return v
+        return v
+
+
+class TrendMetrics(BaseModel):
+    """Short-term volume acceleration and sentiment velocity tracking."""
+    buzz_ratio: float = Field(default=1.0, description="Current 24h volume relative to baseline")
+    sentiment_velocity: float = Field(default=0.0, description="Delta in sentiment score vs previous window")
+    trend_verdict: TrendVerdict = Field(default=TrendVerdict.NEUTRAL_CONSOLIDATION)
+    articles_24h_count: int = Field(default=1)
+
+    @field_validator("trend_verdict", mode="before")
+    @classmethod
+    def normalize_trend_verdict(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            cleaned = v.strip().upper().replace(" ", "_")
+            try:
+                return TrendVerdict(cleaned)
+            except ValueError:
+                return v
+        return v
+
+
 class TelegramButton(BaseModel):
     """Inline URL button for Telegram notifications."""
     text: str = Field(..., description="Button display label text.")
@@ -352,10 +435,36 @@ class MarketImpactAnalysis(BaseModel):
         default_factory=list,
         description="Interactive action buttons attached to notification alert."
     )
+    sentiment: SentimentScore = Field(
+        default_factory=SentimentScore,
+        description="Compound sentiment score and probabilistic distribution."
+    )
+    trend: Optional[TrendMetrics] = Field(
+        default=None,
+        description="Short-term volume buzz ratio and sentiment velocity trend metrics."
+    )
     disclaimer: str = Field(
         default="⚠️ News-derived hypothesis. Market pricing, valuation, and entry points were not checked.",
         description="Mandatory compliance disclaimer separating news inference from trading validation."
     )
+
+    @field_validator("sentiment", mode="before")
+    @classmethod
+    def normalize_sentiment(cls, v: Any) -> Any:
+        if v is None:
+            return SentimentScore()
+        if isinstance(v, dict):
+            return SentimentScore(**v)
+        return v
+
+    @field_validator("trend", mode="before")
+    @classmethod
+    def normalize_trend(cls, v: Any) -> Any:
+        if v is None:
+            return None
+        if isinstance(v, dict):
+            return TrendMetrics(**v)
+        return v
 
     @field_validator("sec_filing_item", mode="before")
     @classmethod

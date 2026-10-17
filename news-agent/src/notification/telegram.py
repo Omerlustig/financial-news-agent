@@ -10,10 +10,15 @@ from src.models import (
     ImpactGrade,
     MarketImpactAnalysis,
     RawArticle,
+    SentimentLabel,
+    SentimentScore,
     SurgeLevel,
     TelegramButton,
+    TrendMetrics,
+    TrendVerdict,
 )
 from src.notification.base import BaseNotifier
+
 
 logger = logging.getLogger(__name__)
 
@@ -90,11 +95,45 @@ def safe_truncate_html(text: str, max_length: int = MAX_TELEGRAM_MESSAGE_LENGTH)
     return truncated + ellipsis + closing
 
 
+def format_sentiment_gauge(score: float, width: int = 10) -> str:
+    """Generate a visual unicode block gauge representing sentiment score.
+
+    Rules:
+    - If score > 0: `width` proportional green blocks 🟩 followed by white blocks ⬜
+      e.g. for score 0.70 with width 10 -> 7 green, 3 white: `[🟩🟩🟩🟩🟩🟩🟩⬜⬜⬜] (+0.70)`
+    - If score < 0: `width` proportional red blocks 🟥 followed by white blocks ⬜
+      e.g. for score -0.50 with width 10 -> 5 red, 5 white: `[🟥🟥🟥🟥🟥⬜⬜⬜⬜⬜] (-0.50)`
+    - If score == 0: all white blocks `[⬜⬜⬜⬜⬜⬜⬜⬜⬜⬜] (0.00)`
+    """
+    if score is None:
+        score = 0.0
+
+    try:
+        val = float(score)
+    except (ValueError, TypeError):
+        val = 0.0
+
+    clamped = max(-1.0, min(1.0, val))
+
+    if abs(clamped) < 0.005:
+        return f"[{'⬜' * width}] (0.00)"
+
+    if clamped > 0:
+        filled = min(width, max(0, round(clamped * width)))
+        empty = width - filled
+        return f"[{'🟩' * filled}{'⬜' * empty}] (+{clamped:.2f})"
+    else:
+        filled = min(width, max(0, round(abs(clamped) * width)))
+        empty = width - filled
+        return f"[{'🟥' * filled}{'⬜' * empty}] ({clamped:.2f})"
+
+
 def format_telegram_message(
     article: RawArticle,
     analysis: MarketImpactAnalysis,
     directional_stance: Optional[str] = None,
 ) -> str:
+
     """Format an institutional market impact analysis into a Telegram HTML alert.
 
     Follows the institutional causal alert specification:
@@ -182,7 +221,43 @@ def format_telegram_message(
         sources_str = ", ".join(corroborating)
         lines.append(f"📡 <b>Corroborated by:</b> {escape_html(sources_str)} ({len(corroborating)} independent sources)")
 
+    # Sentiment & Trend metrics
+    sentiment_score = 0.0
+    sentiment_label_val = "NEUTRAL"
+    if getattr(analysis, "sentiment", None) is not None and analysis.sentiment is not None:
+        if analysis.sentiment.score is not None:
+            sentiment_score = float(analysis.sentiment.score)
+        if analysis.sentiment.label is not None:
+            sentiment_label_val = getattr(
+                analysis.sentiment.label, "value", str(analysis.sentiment.label)
+            ).upper().replace(" ", "_")
+
+    emoji_badges = {
+        "VERY_BULLISH": "🚀 VERY BULLISH",
+        "BULLISH": "🟢 BULLISH",
+        "NEUTRAL": "⚪ NEUTRAL",
+        "BEARISH": "🔴 BEARISH",
+        "VERY_BEARISH": "🚨 VERY BEARISH",
+    }
+    emoji_badge = emoji_badges.get(sentiment_label_val, f"⚪ {escape_html(sentiment_label_val)}")
+    gauge = format_sentiment_gauge(sentiment_score, width=10)
+    lines.append(f"📊 <b>Sentiment:</b> {emoji_badge} | {gauge}")
+
+    if getattr(analysis, "trend", None) is not None and analysis.trend is not None:
+        lines.append(
+            f"🔥 <b>News Buzz:</b> {analysis.trend.buzz_ratio:.1f}x (24h Articles: {analysis.trend.articles_24h_count})"
+        )
+        verdict_val = (
+            analysis.trend.trend_verdict.value
+            if hasattr(analysis.trend.trend_verdict, "value")
+            else str(analysis.trend.trend_verdict)
+        )
+        lines.append(
+            f"📈 <b>Trend Verdict:</b> {escape_html(verdict_val)} (Velocity: {analysis.trend.sentiment_velocity:+.2f})"
+        )
+
     # Executive Summary
+
     summary = analysis.summary
     if not summary and analysis.causal_chain and analysis.causal_chain.event_facts:
         summary = analysis.causal_chain.event_facts
@@ -275,12 +350,14 @@ class TelegramNotifier(BaseNotifier):
         timeout: int = 10,
         max_retries: int = 3,
         parse_mode: str = "HTML",
+        fallback_to_console: bool = False,
     ) -> None:
         self.bot_token = bot_token.strip() if bot_token else None
         self.chat_id = chat_id.strip() if chat_id else None
         self.timeout = timeout
         self.max_retries = max_retries
         self.parse_mode = parse_mode
+        self.fallback_to_console = fallback_to_console
 
     @property
     def is_configured(self) -> bool:
@@ -304,6 +381,16 @@ class TelegramNotifier(BaseNotifier):
         Returns:
             bool: True if alert dispatched successfully, False otherwise.
         """
+        if not self.is_configured:
+            if self.fallback_to_console:
+                from src.notification.console import ConsoleNotifier
+                return ConsoleNotifier().send_alert(article, analysis)
+            logger.warning(
+                "TelegramNotifier: bot_token or chat_id is missing or unconfigured. "
+                "Skipping notification delivery."
+            )
+            return False
+
         try:
             message = format_telegram_message(article, analysis)
 
@@ -358,11 +445,15 @@ class TelegramNotifier(BaseNotifier):
             bool: True if Telegram API returns ok=True, False otherwise.
         """
         if not self.is_configured:
+            if self.fallback_to_console:
+                from src.notification.console import ConsoleNotifier
+                return ConsoleNotifier().send_message(text, reply_markup=reply_markup)
             logger.warning(
                 "TelegramNotifier: bot_token or chat_id is missing or unconfigured. "
                 "Skipping notification delivery."
             )
             return False
+
 
         endpoint = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
         payload: Dict[str, Any] = {

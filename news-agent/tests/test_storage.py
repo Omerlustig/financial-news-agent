@@ -17,6 +17,10 @@ from src.models import (
     SECFilingItem,
     SurgeLevel,
     TelegramButton,
+    SentimentLabel,
+    SentimentScore,
+    TrendVerdict,
+    TrendMetrics,
 )
 
 
@@ -487,8 +491,16 @@ def test_storage_schema_migration_safety(tmp_path):
         "passes_hard_gates",
         "sec_filing_item",
         "surge_level",
+        "sentiment_score",
+        "sentiment_label",
+        "buzz_ratio",
+        "trend_verdict",
     ]:
         assert expected_col in col_names
+
+    # Verify ticker_sentiment_history table exists
+    tbl_cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='ticker_sentiment_history';")
+    assert tbl_cursor.fetchone() is not None
 
     # 4. Insert new article with institutional fields into migrated database
     new_art = RawArticle(
@@ -792,6 +804,204 @@ def test_sec_and_surge_model_contracts():
     assert analysis_str.sec_filing_item == SECFilingItem.ITEM_2_02_EARNINGS_OPERATIONS.value
     assert len(analysis_str.interactive_buttons) == 1
     assert analysis_str.interactive_buttons[0].text == "Details"
+
+
+def test_record_article_persists_sentiment_and_trend(tmp_path):
+    db_path = str(tmp_path / "sentiment_trend_test.db")
+    storage = SQLiteStorage(db_path)
+
+    art = RawArticle(
+        title="NVIDIA Unveils Revolutionary Next-Gen AI Chip Architecture",
+        url="https://techfinance.com/nvda-next-gen",
+        source_name="TechFinance",
+        published_at=datetime.datetime(2026, 10, 17, 12, 0, tzinfo=datetime.timezone.utc),
+    )
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=9,
+        impact_grade=ImpactGrade.CRITICAL,
+        affected_tickers=["$NVDA", "$TSM"],
+        affected_sectors=["Semiconductors"],
+        summary="NVIDIA reveals next-gen architecture accelerating compute capabilities 4x.",
+        catalyst_thesis="Massive revenue expansion expected in cloud compute providers.",
+        status=EventStatus.OPPORTUNITY_CANDIDATE,
+        sentiment=SentimentScore(
+            score=0.85,
+            label=SentimentLabel.VERY_BULLISH,
+            positive=0.9,
+            negative=0.05,
+            neutral=0.05,
+            confidence=0.95,
+        ),
+        trend=TrendMetrics(
+            buzz_ratio=3.2,
+            sentiment_velocity=0.45,
+            trend_verdict=TrendVerdict.STRONG_BULLISH,
+            articles_24h_count=12,
+        ),
+    )
+
+    storage.record_article(art, analysis, alerted=True)
+
+    # 1. Verify columns in articles table
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT * FROM articles WHERE content_hash = ?", (art.content_hash,)).fetchone()
+    assert row is not None
+    assert row["sentiment_score"] == pytest.approx(0.85)
+    assert row["sentiment_label"] == "VERY_BULLISH"
+    assert row["buzz_ratio"] == pytest.approx(3.2)
+    assert row["trend_verdict"] == "STRONG_BULLISH"
+
+    # 2. Verify rows in ticker_sentiment_history for both tickers
+    hist_rows = conn.execute(
+        "SELECT * FROM ticker_sentiment_history WHERE article_hash = ? ORDER BY ticker ASC",
+        (art.content_hash,),
+    ).fetchall()
+    conn.close()
+
+    assert len(hist_rows) == 2
+    assert hist_rows[0]["ticker"] == "$NVDA"
+    assert hist_rows[0]["sentiment_score"] == pytest.approx(0.85)
+    assert hist_rows[0]["sentiment_label"] == "VERY_BULLISH"
+    assert hist_rows[1]["ticker"] == "$TSM"
+    assert hist_rows[1]["sentiment_score"] == pytest.approx(0.85)
+
+    storage.close()
+
+
+def test_record_ticker_sentiment_and_window_query(tmp_path):
+    db_path = str(tmp_path / "ticker_window_test.db")
+    storage = SQLiteStorage(db_path)
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    recent_time = now - datetime.timedelta(hours=2)
+    old_time = now - datetime.timedelta(hours=30)
+
+    # Record recent sentiment
+    storage.record_ticker_sentiment(
+        ticker="$AAPL",
+        sentiment_score=0.6,
+        sentiment_label=SentimentLabel.BULLISH,
+        article_hash="hash_aapl_1",
+        published_at=recent_time,
+    )
+
+    # Record older sentiment directly into DB
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        INSERT INTO ticker_sentiment_history (ticker, sentiment_score, sentiment_label, article_hash, published_at, created_at)
+        VALUES ('$AAPL', -0.5, 'BEARISH', 'hash_aapl_old', ?, ?)
+        """,
+        (old_time.isoformat(), old_time.isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+    # Query with 24h window - should only include recent record
+    window = storage.get_ticker_sentiment_window("$AAPL", hours=24)
+    assert len(window) == 1
+    assert window[0]["article_hash"] == "hash_aapl_1"
+    assert window[0]["sentiment_score"] == pytest.approx(0.6)
+
+    # Query without leading '$' should also match
+    window_no_dollar = storage.get_ticker_sentiment_window("AAPL", hours=24)
+    assert len(window_no_dollar) == 1
+    assert window_no_dollar[0]["ticker"] == "$AAPL"
+
+    # Query with 48h window - should include both
+    window_48h = storage.get_ticker_sentiment_window("$AAPL", hours=48)
+    assert len(window_48h) == 2
+
+    # Query non-existent ticker
+    empty_window = storage.get_ticker_sentiment_window("$MSFT", hours=24)
+    assert empty_window == []
+
+    storage.close()
+
+
+def test_get_all_tickers_trend_summary(tmp_path):
+    db_path = str(tmp_path / "trend_summary_test.db")
+    storage = SQLiteStorage(db_path)
+
+    # Empty table returns empty list
+    assert storage.get_all_tickers_trend_summary(hours=24) == []
+
+    # Insert multiple data points for tickers
+    now = datetime.datetime.now(datetime.timezone.utc)
+    storage.record_ticker_sentiment("$NVDA", 0.8, "VERY_BULLISH", "hash_1", published_at=now)
+    storage.record_ticker_sentiment("$NVDA", 0.6, "BULLISH", "hash_2", published_at=now)
+    storage.record_ticker_sentiment("$TSLA", -0.4, "BEARISH", "hash_3", published_at=now)
+    storage.record_ticker_sentiment("$GOOGL", 0.05, "NEUTRAL", "hash_4", published_at=now)
+
+    summary = storage.get_all_tickers_trend_summary(hours=24)
+    assert len(summary) == 3
+
+    # Check $NVDA aggregate: avg=(0.8+0.6)/2 = 0.7 -> VERY_BULLISH
+    nvda = next(s for s in summary if s["ticker"] == "$NVDA")
+    assert nvda["total_articles"] == 2
+    assert nvda["avg_sentiment"] == pytest.approx(0.7)
+    assert nvda["sentiment_label"] == "VERY_BULLISH"
+
+    # Check $TSLA aggregate: avg=-0.4 -> BEARISH
+    tsla = next(s for s in summary if s["ticker"] == "$TSLA")
+    assert tsla["total_articles"] == 1
+    assert tsla["avg_sentiment"] == pytest.approx(-0.4)
+    assert tsla["sentiment_label"] == "BEARISH"
+
+    # Check $GOOGL aggregate: avg=0.05 -> NEUTRAL
+    googl = next(s for s in summary if s["ticker"] == "$GOOGL")
+    assert googl["total_articles"] == 1
+    assert googl["avg_sentiment"] == pytest.approx(0.05)
+    assert googl["sentiment_label"] == "NEUTRAL"
+
+    storage.close()
+
+
+def test_sentiment_and_trend_model_contracts():
+    # Verify SentimentLabel values
+    assert SentimentLabel.VERY_BEARISH.value == "VERY_BEARISH"
+    assert SentimentLabel.BEARISH.value == "BEARISH"
+    assert SentimentLabel.NEUTRAL.value == "NEUTRAL"
+    assert SentimentLabel.BULLISH.value == "BULLISH"
+    assert SentimentLabel.VERY_BULLISH.value == "VERY_BULLISH"
+
+    # Verify TrendVerdict values
+    assert TrendVerdict.STRONG_BULLISH.value == "STRONG_BULLISH"
+    assert TrendVerdict.MODERATE_BULLISH.value == "MODERATE_BULLISH"
+    assert TrendVerdict.NEUTRAL_CONSOLIDATION.value == "NEUTRAL_CONSOLIDATION"
+    assert TrendVerdict.MODERATE_BEARISH.value == "MODERATE_BEARISH"
+    assert TrendVerdict.PANIC_CAPITULATION.value == "PANIC_CAPITULATION"
+
+    # Default MarketImpactAnalysis has default sentiment and None trend
+    analysis = MarketImpactAnalysis(
+        is_market_moving=False,
+        confidence_score=3,
+        impact_grade=ImpactGrade.LOW,
+        summary="Test summary",
+        catalyst_thesis="Test thesis",
+    )
+    assert analysis.sentiment.score == 0.0
+    assert analysis.sentiment.label == SentimentLabel.NEUTRAL
+    assert analysis.trend is None
+
+    # Dict backward compatibility
+    analysis_dict = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=8,
+        impact_grade=ImpactGrade.HIGH,
+        summary="Test summary",
+        catalyst_thesis="Test thesis",
+        sentiment={"score": -0.65, "label": "very_bearish"},
+        trend={"buzz_ratio": 2.1, "trend_verdict": "panic_capitulation"},
+    )
+    assert analysis_dict.sentiment.score == pytest.approx(-0.65)
+    assert analysis_dict.sentiment.label == SentimentLabel.VERY_BEARISH
+    assert analysis_dict.trend is not None
+    assert analysis_dict.trend.buzz_ratio == pytest.approx(2.1)
+    assert analysis_dict.trend.trend_verdict == TrendVerdict.PANIC_CAPITULATION
+
 
 
 
