@@ -259,13 +259,25 @@ class Pipeline:
     def run_cycle(self) -> CycleSummary:
         """Execute a complete scan cycle across all configured sources."""
         logger.info("Starting pipeline scan cycle across sources...")
-        if self.fetcher is not None:
-            articles = self.fetcher()
-        else:
-            articles = fetch_all_sources(self.sources, timeout=self.fetch_timeout)
+        fetch_error = False
+        try:
+            if self.fetcher is not None:
+                try:
+                    articles = self.fetcher(self.sources)
+                except TypeError:
+                    articles = self.fetcher()
+            else:
+                articles = fetch_all_sources(self.sources, timeout=self.fetch_timeout)
+        except Exception as exc:
+            logger.error("Critical error during source ingestion: %s", exc, exc_info=True)
+            articles = []
+            fetch_error = True
 
         logger.info("Ingestion completed: %d raw articles fetched.", len(articles))
         summary = self.process_articles(articles)
+        if fetch_error:
+            summary.errors += 1
+
         logger.info(
             "Cycle finished: %d fetched, %d new/unseen, %d analyzed, %d alerted, %d errors.",
             summary.fetched,

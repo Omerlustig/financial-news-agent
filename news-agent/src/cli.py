@@ -73,12 +73,13 @@ def run_once(
 
 @app.command("run")
 def run(
+    daemon: bool = typer.Option(True, "--daemon/--no-daemon", "-d", help="Run continuous background monitoring daemon"),
     interval: Optional[int] = typer.Option(None, "--interval", "-i", help="Polling interval in minutes (defaults to settings.yaml)"),
     config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to settings.yaml"),
     sources: Optional[str] = typer.Option(None, "--sources", "-s", help="Path to sources.yaml"),
     alert_on_all: bool = typer.Option(False, "--alert-on-all", help="Bypass impact and confidence thresholds for testing"),
 ) -> None:
-    """Run continuous news monitoring daemon with graceful signal shutdown."""
+    """Run news monitoring pipeline (daemon mode by default, or single-run if --no-daemon)."""
     settings = load_settings(config)
     sources_list = load_sources(sources)
 
@@ -86,14 +87,27 @@ def run(
     if poll_interval <= 0:
         poll_interval = 15
 
-    console.print(f"[bold green]Starting Market News Agent daemon (polling every {poll_interval} minutes)...[/bold green]")
-    console.print("[yellow]Press Ctrl+C or send SIGTERM to shut down gracefully.[/yellow]")
-
     pipeline = Pipeline(
         settings=settings,
         sources=sources_list,
         alert_on_all=alert_on_all or settings.filter.alert_on_all,
     )
+
+    if not daemon:
+        console.print("[bold green]Executing single news agent scan cycle (--no-daemon)...[/bold green]")
+        try:
+            summary = pipeline.run_cycle()
+            console.print(
+                f"[green]Cycle completed:[/] {summary.fetched} fetched, "
+                f"{summary.new_unseen} unseen, {summary.analyzed} analyzed, "
+                f"{summary.alerted} alerted, {summary.errors} errors."
+            )
+            return
+        finally:
+            pipeline.close()
+
+    console.print(f"[bold green]Starting Market News Agent daemon (polling every {poll_interval} minutes)...[/bold green]")
+    console.print("[yellow]Press Ctrl+C or send SIGTERM to shut down gracefully.[/yellow]")
 
     stop_event = threading.Event()
 

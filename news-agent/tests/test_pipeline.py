@@ -481,8 +481,43 @@ def test_cli_run_daemon_graceful_shutdown():
 
     with patch("src.cli.Pipeline.run_cycle", side_effect=mock_cycle), \
          patch("src.cli.threading.Event", return_value=real_event):
-        result = runner.invoke(app, ["run", "--interval", "1"])
+        result = runner.invoke(app, ["run", "--daemon", "--interval", "1"])
         assert result.exit_code == 0
         assert "Starting Market News Agent daemon" in result.output
         assert "Daemon shutdown complete" in result.output
+
+
+def test_cli_run_no_daemon():
+    from typer.testing import CliRunner
+    from src.cli import app
+
+    runner = CliRunner()
+    with patch("src.cli.Pipeline.run_cycle") as mock_run:
+        mock_run.return_value = CycleSummary(fetched=2, new_unseen=1, analyzed=1, alerted=0, errors=0)
+        result = runner.invoke(app, ["run", "--no-daemon"])
+        assert result.exit_code == 0
+        assert "Executing single news agent scan cycle" in result.output
+        assert "Cycle completed: 2 fetched" in result.output
+
+
+def test_pipeline_run_cycle_ingestion_exception_containment():
+    mock_storage = MagicMock()
+    mock_analyzer = MagicMock()
+    mock_notifier = MagicMock()
+
+    mock_fetcher = MagicMock(side_effect=Exception("Critical RSS network timeout"))
+
+    pipeline = Pipeline(
+        storage=mock_storage,
+        analyzer=mock_analyzer,
+        notifier=mock_notifier,
+        fetcher=mock_fetcher,
+    )
+    summary = pipeline.run_cycle()
+
+    assert summary.fetched == 0
+    assert summary.errors == 1
+    mock_analyzer.analyze.assert_not_called()
+    mock_notifier.send_alert.assert_not_called()
+
 
