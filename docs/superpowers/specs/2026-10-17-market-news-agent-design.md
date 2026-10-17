@@ -2,7 +2,7 @@
 
 **Date**: 2026-10-17  
 **Status**: Draft for User Review  
-**Project Path**: `new-agent/`
+**Project Path**: `news-agent/`
 
 ---
 
@@ -10,7 +10,7 @@
 
 The **Market News Analysis Agent** is a periodic, automated intelligence system designed to ingest breaking financial and global news headlines, analyze them using LLM-powered market impact reasoning, assign confidence and severity grades, and deliver real-time push alerts to Telegram.
 
-The project is structured under the `new-agent/` directory, adhering to modular software architecture, financial market analysis methodologies, and test-driven quality assurance.
+The project is structured under the `news-agent/` directory, adhering to modular software architecture, financial market analysis methodologies, and test-driven quality assurance.
 
 ### Key Objectives
 * **Automated Periodic Ingestion**: Fetch headlines and summaries from a configurable list of top financial and news websites (RSS/Atom feeds with HTML scraping fallback).
@@ -69,10 +69,10 @@ Market news is 95% noise and 5% catalyst. The agent uses a prompt and schema eng
    * Map macro trends to GICS sectors (e.g., *Information Technology*, *Health Care*, *Financials*, *Energy*) and relevant ETFs (e.g., `$XLE`, `$SMH`, `$XLF`).
 
 ### 2.2 Software Architect: System Structure & Directory Layout
-All code resides under `new-agent/`:
+All code resides under `news-agent/`:
 
 ```text
-new-agent/
+news-agent/
 ├── config/
 │   ├── settings.yaml          # Polling intervals, LLM model, alert thresholds
 │   └── sources.yaml           # RSS feeds and website source definitions
