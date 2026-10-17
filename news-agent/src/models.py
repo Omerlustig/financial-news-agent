@@ -285,6 +285,14 @@ class MarketImpactAnalysis(BaseModel):
         default=None,
         description="Concise 1-sentence actionable analyst recommendation or monitoring posture (e.g. 'Accumulate $NVDA on dips; hedge long exposure with $SMH puts; avoid $INTC until next quarter')."
     )
+    corroborating_sources: List[str] = Field(
+        default_factory=list,
+        description="List of distinct publisher names corroborating this event."
+    )
+    corroboration_count: int = Field(
+        default=1,
+        description="Number of distinct sources reporting this catalyst."
+    )
     disclaimer: str = Field(
         default="⚠️ News-derived hypothesis. Market pricing, valuation, and entry points were not checked.",
         description="Mandatory compliance disclaimer separating news inference from trading validation."

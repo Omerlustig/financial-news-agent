@@ -61,7 +61,9 @@ class SQLiteStorage(BaseStorage):
                         negatively_exposed TEXT,
                         counterarguments TEXT,
                         invalidation_conditions TEXT,
-                        passes_hard_gates INTEGER
+                        passes_hard_gates INTEGER,
+                        corroborating_sources TEXT,
+                        corroboration_count INTEGER DEFAULT 1
                     );
                     """
                 )
@@ -101,6 +103,8 @@ class SQLiteStorage(BaseStorage):
                     ("counterarguments", "TEXT"),
                     ("invalidation_conditions", "TEXT"),
                     ("passes_hard_gates", "INTEGER"),
+                    ("corroborating_sources", "TEXT"),
+                    ("corroboration_count", "INTEGER"),
                 ]
                 for col_name, col_type in new_columns:
                     if col_name not in existing_cols:
@@ -220,6 +224,17 @@ class SQLiteStorage(BaseStorage):
         if analysis and analysis.hard_gates is not None:
             passes_hard_gates = 1 if analysis.hard_gates.passes_all_gates else 0
 
+        corroborating_sources = (
+            json.dumps(analysis.corroborating_sources)
+            if analysis and analysis.corroborating_sources
+            else None
+        )
+        corroboration_count = (
+            analysis.corroboration_count
+            if analysis and analysis.corroboration_count is not None
+            else 1
+        )
+
         sql = """
         INSERT INTO articles (
             content_hash,
@@ -241,8 +256,10 @@ class SQLiteStorage(BaseStorage):
             negatively_exposed,
             counterarguments,
             invalidation_conditions,
-            passes_hard_gates
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            passes_hard_gates,
+            corroborating_sources,
+            corroboration_count
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(content_hash) DO UPDATE SET
             url = excluded.url,
             title = excluded.title,
@@ -261,7 +278,9 @@ class SQLiteStorage(BaseStorage):
             negatively_exposed = COALESCE(excluded.negatively_exposed, articles.negatively_exposed),
             counterarguments = COALESCE(excluded.counterarguments, articles.counterarguments),
             invalidation_conditions = COALESCE(excluded.invalidation_conditions, articles.invalidation_conditions),
-            passes_hard_gates = COALESCE(excluded.passes_hard_gates, articles.passes_hard_gates)
+            passes_hard_gates = COALESCE(excluded.passes_hard_gates, articles.passes_hard_gates),
+            corroborating_sources = COALESCE(excluded.corroborating_sources, articles.corroborating_sources),
+            corroboration_count = COALESCE(excluded.corroboration_count, articles.corroboration_count)
         """
         with self._lock:
             if self._conn is None:
@@ -290,6 +309,8 @@ class SQLiteStorage(BaseStorage):
                         counterarguments,
                         invalidation_conditions,
                         passes_hard_gates,
+                        corroborating_sources,
+                        corroboration_count,
                     ),
                 )
 

@@ -160,6 +160,12 @@ def format_telegram_message(
     lines.append(f"<b>Headline:</b> {escape_html(article.title)}")
     lines.append(f"<b>Publisher:</b> {escape_html(article.source_name)} | <b>Published:</b> {pub_time}")
 
+    # Multi-Source Corroboration badge if corroborated across independent publishers
+    corroborating = getattr(analysis, "corroborating_sources", None) or []
+    if len(corroborating) >= 2:
+        sources_str = ", ".join(corroborating)
+        lines.append(f"📡 <b>Corroborated by:</b> {escape_html(sources_str)} ({len(corroborating)} independent sources)")
+
     # Executive Summary
     summary = analysis.summary
     if not summary and analysis.causal_chain and analysis.causal_chain.event_facts:

@@ -25,6 +25,31 @@ sources:
     url: "https://feeds.bloomberg.com/markets/news.rss"
     enabled: true
 
+  - name: "MarketWatch Top Stories"
+    type: "rss"
+    url: "https://feeds.content.dowjones.io/public/rss/mw_topstories"
+    enabled: true
+
+  - name: "Investing.com News"
+    type: "rss"
+    url: "https://www.investing.com/rss/news.rss"
+    enabled: true
+
+  - name: "Investors Business Daily"
+    type: "rss"
+    url: "https://www.investors.com/feed/"
+    enabled: true
+
+  - name: "New York Times Business"
+    type: "rss"
+    url: "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml"
+    enabled: true
+
+  - name: "BBC Business"
+    type: "rss"
+    url: "http://feeds.bbci.co.uk/news/business/rss.xml"
+    enabled: true
+
   # US Primary & Specialist Sources
   - name: "SEC EDGAR Filings"
     type: "rss"
@@ -60,6 +85,21 @@ sources:
   - name: "TheMarker"
     type: "rss"
     url: "https://www.themarker.com/srv/rss"
+    enabled: true
+
+  - name: "Bizportal"
+    type: "rss"
+    url: "https://www.bizportal.co.il/rss/bizportalrss.xml"
+    enabled: true
+
+  - name: "Ynet Economy"
+    type: "rss"
+    url: "https://www.ynet.co.il/Integration/StoryRss6.xml"
+    enabled: true
+
+  - name: "i24NEWS English"
+    type: "rss"
+    url: "https://www.i24news.tv/en/rss"
     enabled: true
 
   - name: "TASE Market Announcements"

@@ -652,4 +652,42 @@ def test_llm_metrics_operations(tmp_path):
     storage.close()
 
 
+def test_record_article_persists_corroboration_fields(tmp_path):
+    db_path = str(tmp_path / "corroboration_test.db")
+    storage = SQLiteStorage(db_path)
+
+    art = RawArticle(
+        title="Antitrust Agency Sues Tech Giant",
+        url="https://marketwatch.com/sue-giant",
+        source_name="MarketWatch",
+    )
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=9,
+        impact_grade=ImpactGrade.CRITICAL,
+        affected_tickers=["$GOOGL"],
+        affected_sectors=["Cloud Computing"],
+        summary="Suit filed.",
+        catalyst_thesis="Antitrust breakup.",
+        status=EventStatus.OPPORTUNITY_CANDIDATE,
+        corroborating_sources=["Bloomberg", "MarketWatch", "Reuters"],
+        corroboration_count=3,
+    )
+
+    storage.record_article(art, analysis, alerted=True)
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT * FROM articles WHERE content_hash = ?", (art.content_hash,)).fetchone()
+    conn.close()
+
+    assert row is not None
+    assert row["corroboration_count"] == 3
+    sources = json.loads(row["corroborating_sources"])
+    assert sources == ["Bloomberg", "MarketWatch", "Reuters"]
+
+    storage.close()
+
+
+
 

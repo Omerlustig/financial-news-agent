@@ -8,6 +8,7 @@ from src.ingestion.rss import fetch_all_sources
 from src.storage.base import BaseStorage
 from src.storage.sqlite import SQLiteStorage
 from src.analysis.analyzer import MarketImpactAnalyzer
+from src.analysis.corroborator import EventCorroborator
 from src.notification.base import BaseNotifier
 from src.notification.telegram import TelegramNotifier
 
@@ -64,6 +65,7 @@ class Pipeline:
         storage: Optional[BaseStorage] = None,
         analyzer: Optional[MarketImpactAnalyzer] = None,
         notifier: Optional[BaseNotifier] = None,
+        corroborator: Optional[EventCorroborator] = None,
         sources: Optional[List[SourceConfig]] = None,
         fetcher: Optional[Callable[[], List[RawArticle]]] = None,
         min_score: Optional[int] = None,
@@ -76,6 +78,7 @@ class Pipeline:
         self.settings = settings
         self.fetch_timeout = fetch_timeout
         self.fetcher = fetcher
+        self.corroborator = corroborator if corroborator is not None else EventCorroborator()
 
         # Threshold resolution: min_score takes precedence over min_confidence_score
         if min_score is not None:
@@ -242,27 +245,34 @@ class Pipeline:
         alerted_count = 0
         errors_count = 0
 
-        # 2. Iterate through candidate unseen items
-        for article in unseen_articles:
+        # 2. Multi-Source Event Clustering
+        clusters = self.corroborator.cluster_articles(unseen_articles)
+
+        # 3. Iterate through candidate event clusters
+        for cluster in clusters:
+            canonical = cluster.canonical_article
             try:
-                analysis = self.analyzer.analyze(article)
+                analysis = self.analyzer.analyze(canonical)
                 analyzed_count += 1
             except Exception as exc:
                 logger.error(
                     "Error analyzing article '%s' (%s): %s",
-                    article.title,
-                    article.url,
+                    canonical.title,
+                    canonical.url,
                     exc,
                     exc_info=True,
                 )
                 errors_count += 1
                 continue
 
+            # Apply multi-source corroboration weights, validation boost & source tracking
+            analysis = self.corroborator.corroborate_analysis(analysis, cluster)
+
             # Record LLM observability and token usage telemetry
             if analysis.token_usage is not None and self.storage is not None:
                 try:
                     self.storage.record_llm_metric(
-                        content_hash=article.content_hash,
+                        content_hash=canonical.content_hash,
                         model_name=analysis.token_usage.model_name or "unknown",
                         prompt_tokens=analysis.token_usage.prompt_tokens,
                         completion_tokens=analysis.token_usage.completion_tokens,
@@ -272,22 +282,22 @@ class Pipeline:
                 except Exception as exc:
                     logger.error(
                         "Error recording LLM telemetry for article '%s': %s",
-                        article.title,
+                        canonical.title,
                         exc,
                         exc_info=True,
                     )
 
-            # 3. Filtering & alert criteria (enforcing Hard Gate Decision Engine)
+            # Filtering & alert criteria (enforcing Hard Gate Decision Engine)
             alert_warranted = self.should_alert(analysis)
             alert_delivered = False
 
             if alert_warranted:
                 try:
-                    alert_delivered = bool(self.notifier.send_alert(article, analysis))
+                    alert_delivered = bool(self.notifier.send_alert(canonical, analysis))
                 except Exception as exc:
                     logger.error(
                         "Error dispatching notification for article '%s': %s",
-                        article.title,
+                        canonical.title,
                         exc,
                         exc_info=True,
                     )
@@ -298,27 +308,45 @@ class Pipeline:
             else:
                 logger.info(
                     "Article '%s' (%s) routed to storage without alert (status=%s, score=%d, alerted=False).",
-                    article.title,
-                    article.url,
+                    canonical.title,
+                    canonical.url,
                     analysis.status,
                     analysis.confidence_score,
                 )
 
-            # 4. Storage persistence (non-alerted articles saved with alerted=False to prevent re-analysis)
+            # Storage persistence:
+            # 1. Record canonical article with actual alerted status
             try:
                 self.storage.record_article(
-                    article,
+                    canonical,
                     analysis,
                     alerted=alert_delivered,
                 )
             except Exception as exc:
                 logger.error(
                     "Error recording article '%s' to storage: %s",
-                    article.title,
+                    canonical.title,
                     exc,
                     exc_info=True,
                 )
                 errors_count += 1
+
+            # 2. Record all corroborating secondary articles with alerted=False to prevent re-analysis
+            for secondary in cluster.articles:
+                if secondary.content_hash != canonical.content_hash:
+                    try:
+                        self.storage.record_article(
+                            secondary,
+                            analysis,
+                            alerted=False,
+                        )
+                    except Exception as exc:
+                        logger.error(
+                            "Error recording corroborating article '%s' to storage: %s",
+                            secondary.title,
+                            exc,
+                            exc_info=True,
+                        )
 
         return CycleSummary(
             fetched=fetched_count,

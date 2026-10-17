@@ -46,6 +46,11 @@ flowchart TD
 
 ### Core Architecture Highlights
 - **Decoupled Modular Architecture**: Clean separation between ingestion, LLM analysis, deduplication persistence, and notification layers.
+- **Multi-Source Event Crossing & Corroboration Engine**: Automatically clusters incoming breaking headlines across independent newsrooms (Reuters, Bloomberg, MarketWatch, Globes, Bizportal, etc.) within a rolling time window. When 2+ independent publishers corroborate a breaking catalyst:
+  - Multi-source verification gate (`is_verified`) automatically passes.
+  - Confidence score receives an institutional credibility boost (+1 to +2 points).
+  - Status is elevated to `OPPORTUNITY_CANDIDATE`.
+  - Dispatches **ONE single consolidated Telegram alert** citing all corroborating outlets (`📡 Corroborated by: [Reuters, Bloomberg, MarketWatch]`)—preventing redundant notification spam.
 - **Resilient Network Ingestion & Auto-Retries**: Configurable automatic retries with exponential backoff on network timeouts, DNS drops, or HTTP 5xx errors, plus HTTP 304 conditional GET (`ETag`/`Last-Modified`) feed caching to skip unchanged feeds.
 - **Zero Duplicate Processing (Multi-Tier Deduplication)**: Automatic URL canonicalization (stripping tracking parameters like `utm_*`, `ref`, and `fbclid`), deterministic SHA-256 content hashing (`url + title`), and SQLite WAL persistence of both alerted and non-alerted articles guarantee an article is never re-analyzed or re-alerted.
 - **Multi-LLM Support & Auto-Failover**: Powered by `litellm`—primary model delegation (`gemini/gemini-1.5-flash`) with automatic failover to secondary fallback models (e.g. `gpt-4o-mini`) on provider rate limits or downtime.

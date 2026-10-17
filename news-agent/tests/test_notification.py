@@ -499,3 +499,26 @@ def test_telegram_message_formatting_with_explicit_recommendation():
     msg = format_telegram_message(article, analysis)
     assert "💡 <b>Recommendation:</b> Accumulate $CHKP on opening dip; set trailing stops at 50-day moving average." in msg
 
+
+def test_telegram_message_formatting_corroboration_badge():
+    article = RawArticle(
+        title="Regulators Approve Landmark Biotech Merger",
+        url="https://marketwatch.com/biotech-deal",
+        source_name="MarketWatch",
+    )
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=9,
+        impact_grade=ImpactGrade.CRITICAL,
+        affected_tickers=["$BIIB"],
+        affected_sectors=["Biotech"],
+        summary="Antitrust cleared merger.",
+        catalyst_thesis="Merger approved.",
+        status=EventStatus.OPPORTUNITY_CANDIDATE,
+        corroborating_sources=["Bloomberg", "MarketWatch", "Reuters"],
+        corroboration_count=3,
+    )
+    msg = format_telegram_message(article, analysis)
+    assert "📡 <b>Corroborated by:</b> Bloomberg, MarketWatch, Reuters (3 independent sources)" in msg
+
+
