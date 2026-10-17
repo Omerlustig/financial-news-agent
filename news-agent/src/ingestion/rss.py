@@ -23,7 +23,11 @@ from src.storage.base import BaseStorage
 
 logger = logging.getLogger(__name__)
 
-USER_AGENT = "MarketNewsAgent/0.1.0 (+https://github.com/market-news-agent)"
+USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/128.0.0.0 Safari/537.36 (MarketNewsAgent/1.0)"
+)
 DEFAULT_TIMEOUT_SECONDS = 15.0
 
 
@@ -147,6 +151,7 @@ class RSSFetcher(BaseFetcher):
         logger.info("Fetching RSS feed for source '%s' from %s", self.source_config.name, url)
 
         parsed = None
+        raw_bytes: Optional[bytes] = None
 
         if (
             self.storage is not None
@@ -155,12 +160,17 @@ class RSSFetcher(BaseFetcher):
             and url.startswith(("http://", "https://"))
         ):
             cached_etag, cached_last_modified = self.storage.get_feed_cache(url)
-            headers = {"User-Agent": self.user_agent}
+            headers = {
+                "User-Agent": self.user_agent,
+                "Accept": "application/rss+xml, application/xml, text/xml, */*",
+                "Accept-Language": "en-US,en;q=0.9,he;q=0.8",
+            }
             if cached_etag:
                 headers["If-None-Match"] = cached_etag
             if cached_last_modified:
                 headers["If-Modified-Since"] = cached_last_modified
 
+            raw_bytes: Optional[bytes] = None
             for attempt in range(1, self.max_retries + 1):
                 try:
                     response = requests.get(url, headers=headers, timeout=self.timeout)
@@ -175,7 +185,8 @@ class RSSFetcher(BaseFetcher):
                     elif response.status_code == 200:
                         new_etag = response.headers.get("ETag")
                         new_last_modified = response.headers.get("Last-Modified")
-                        parsed = feedparser.parse(response.content)
+                        raw_bytes = response.content
+                        parsed = feedparser.parse(raw_bytes)
                         if self.storage is not None:
                             self.storage.set_feed_cache(url, new_etag, new_last_modified)
                         break
@@ -264,6 +275,19 @@ class RSSFetcher(BaseFetcher):
         bozo_exc = getattr(parsed, "bozo_exception", None) or (
             parsed.get("bozo_exception") if isinstance(parsed, dict) else None
         )
+
+        if is_bozo and not entries and raw_bytes:
+            try:
+                text_clean = raw_bytes.decode("utf-8", errors="replace")
+                sanitized_xml = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text_clean)
+                re_parsed = feedparser.parse(sanitized_xml)
+                re_entries = getattr(re_parsed, "entries", None) or []
+                if re_entries:
+                    parsed = re_parsed
+                    entries = re_entries
+                    is_bozo = getattr(re_parsed, "bozo", 0)
+            except Exception:
+                pass
 
         if is_bozo and not entries:
             logger.warning(

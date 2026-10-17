@@ -4,8 +4,16 @@ import signal
 import sys
 import threading
 import time
+import warnings
 from pathlib import Path
 from typing import Optional
+
+warnings.filterwarnings("ignore", message=".*urllib3.*or chardet.*doesn't match a supported version.*")
+warnings.filterwarnings("ignore", message=".*urllib3.*")
+
+import litellm
+litellm.suppress_debug_info = True
+litellm.drop_params = True
 
 import requests
 import typer

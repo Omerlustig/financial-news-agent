@@ -5,6 +5,8 @@ import time
 from typing import Any, Dict, List, Optional, Union
 
 import litellm
+litellm.suppress_debug_info = True
+litellm.drop_params = True
 
 from src.models import (
     RawArticle,
@@ -185,15 +187,15 @@ class MarketImpactAnalyzer:
                         or "429" in str(e)
                         or "rate_limit" in str(e).lower()
                         or "ratelimit" in str(e).lower()
+                        or "quota" in str(e).lower()
+                        or "resource_exhausted" in str(e).lower()
                     )
-
-                    logger.warning(
-                        "LLM analysis attempt %d/%d on model '%s' failed (%s): %s",
-                        attempt,
-                        self.max_retries,
-                        target_model,
-                        "rate limit 429" if is_rate_limit else "API or parse error",
-                        e,
+                    is_high_demand = (
+                        getattr(e, "status_code", None) == 503
+                        or "503" in str(e)
+                        or "high demand" in str(e).lower()
+                        or "temporarily unavailable" in str(e).lower()
+                        or "serviceunavailable" in str(e).lower()
                     )
 
                     is_auth_error = (
@@ -204,12 +206,13 @@ class MarketImpactAnalyzer:
                         or "unauthorized" in str(e).lower()
                     )
 
-                    # Immediate failover upon 429 rate limit or missing/invalid API key
-                    if has_fallback_remaining and is_rate_limit:
+                    # Immediate failover upon 429 rate limit, 503 high demand spike, or missing/invalid API key
+                    if has_fallback_remaining and (is_rate_limit or is_high_demand):
                         next_model = candidate_models[model_idx + 1]
                         logger.warning(
-                            "Model '%s' hit 429 rate limit; failing over immediately to fallback model '%s'",
+                            "Model '%s' encountered %s; failing over immediately to fallback model '%s'",
                             target_model,
+                            "high demand (503)" if is_high_demand else "rate limit (429)",
                             next_model,
                         )
                         break
@@ -223,6 +226,15 @@ class MarketImpactAnalyzer:
                                 next_model,
                             )
                         break
+
+                    logger.warning(
+                        "LLM analysis attempt %d/%d on model '%s' failed (%s): %s",
+                        attempt,
+                        self.max_retries,
+                        target_model,
+                        "rate limit 429" if is_rate_limit else ("high demand 503" if is_high_demand else "API or parse error"),
+                        e,
+                    )
 
                     if attempt < self.max_retries:
                         time.sleep(current_delay)

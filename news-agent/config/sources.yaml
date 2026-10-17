@@ -12,12 +12,12 @@ sources:
 
   - name: "Yahoo Finance"
     type: "rss"
-    url: "https://finance.yahoo.com/news/rssindex"
+    url: "https://news.google.com/rss/search?q=site:finance.yahoo.com&hl=en-US&gl=US&ceid=US:en"
     enabled: true
 
   - name: "Financial Times"
     type: "rss"
-    url: "https://www.ft.com/rss/home/us"
+    url: "https://www.ft.com/news-feed?format=rss"
     enabled: true
 
   - name: "Bloomberg Markets"
@@ -63,13 +63,13 @@ sources:
 
   - name: "EIA Energy & Petroleum"
     type: "rss"
-    url: "https://www.eia.gov/petroleum/supply/weekly/rss.xml"
+    url: "https://news.google.com/rss/search?q=site:eia.gov&hl=en-US&gl=US&ceid=US:en"
     enabled: true
 
   # Israel Core Sources
   - name: "Globes English"
     type: "rss"
-    url: "https://en.globes.co.il/block/1010"
+    url: "https://www.globes.co.il/webservice/rss/rssfeeder.asmx/FeederNode?iID=1725"
     enabled: true
 
   - name: "Globes Hebrew"
@@ -79,17 +79,17 @@ sources:
 
   - name: "Calcalist"
     type: "rss"
-    url: "https://www.calcalist.co.il/GeneralRSS/0,16335,L-8,00.xml"
+    url: "https://news.google.com/rss/search?q=site:calcalist.co.il&hl=he&gl=IL&ceid=IL:he"
     enabled: true
 
   - name: "TheMarker"
     type: "rss"
-    url: "https://www.themarker.com/srv/rss"
+    url: "https://news.google.com/rss/search?q=site:themarker.com&hl=he&gl=IL&ceid=IL:he"
     enabled: true
 
   - name: "Bizportal"
     type: "rss"
-    url: "https://www.bizportal.co.il/rss/bizportalrss.xml"
+    url: "https://news.google.com/rss/search?q=site:bizportal.co.il&hl=he&gl=IL&ceid=IL:he"
     enabled: true
 
   - name: "Ynet Economy"
@@ -99,15 +99,15 @@ sources:
 
   - name: "i24NEWS English"
     type: "rss"
-    url: "https://www.i24news.tv/en/rss"
+    url: "https://news.google.com/rss/search?q=site:i24news.tv/en&hl=en-US&gl=US&ceid=US:en"
     enabled: true
 
   - name: "TASE Market Announcements"
     type: "rss"
-    url: "https://www.tase.co.il/en/rss/market-announcements"
+    url: "https://news.google.com/rss/search?q=site:tase.co.il&hl=he&gl=IL&ceid=IL:he"
     enabled: true
 
   - name: "MAYA Corporate Disclosures"
     type: "rss"
-    url: "https://maya.tase.co.il/rss/corporate-reports"
+    url: "https://news.google.com/rss/search?q=site:maya.tase.co.il&hl=he&gl=IL&ceid=IL:he"
     enabled: true
