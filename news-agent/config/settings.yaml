@@ -12,7 +12,7 @@ filter:
   alert_on_all: false
 
 llm:
-  model: "gemini/gemini-1.5-flash"
+  model: "gemini/gemini-3.8-flash"
   fallback_model: "gpt-4o-mini" # Secondary fallback model on primary provider failure
   enable_cache: true # Enable LiteLLM response caching
   monthly_budget_usd: 10.0 # Monthly LLM spending cap in USD

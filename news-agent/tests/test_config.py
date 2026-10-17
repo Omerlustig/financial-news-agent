@@ -200,7 +200,7 @@ def test_load_actual_settings_yaml():
     assert settings.filter.min_confidence_score >= 1
     assert isinstance(settings.filter.min_impact_grade, ImpactGrade)
     assert settings.filter.min_impact_grade == ImpactGrade.HIGH
-    assert settings.llm.model == "gemini/gemini-1.5-flash"
+    assert settings.llm.model == "gemini/gemini-3.8-flash"
     assert settings.llm.fallback_model == "gpt-4o-mini"
     assert settings.llm.enable_cache is True
     assert settings.llm.monthly_budget_usd == 10.0
