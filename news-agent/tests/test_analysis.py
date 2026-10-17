@@ -268,6 +268,8 @@ def test_clean_json_markdown():
     assert clean_json_markdown('```\n{"a": 1}\n```') == '{"a": 1}'
     assert clean_json_markdown('{"a": 1}') == '{"a": 1}'
     assert clean_json_markdown('  \n```json\n{"a": 1}\n```\n  ') == '{"a": 1}'
+    assert clean_json_markdown('Here is analysis:\n```json\n{"a": {"b": 2}}\n```\nRegards') == '{"a": {"b": 2}}'
+    assert clean_json_markdown('Here is data: {"a": 1} Thanks!') == '{"a": 1}'
 
 
 def test_filter_valid_tickers():
@@ -275,3 +277,58 @@ def test_filter_valid_tickers():
     raw = ["nvda", "$aapl", "$US", "$CHINA", "$BRK.B", "123", "$1234", "$", "$SMH", "NVDA"]
     filtered = filter_valid_tickers(raw)
     assert filtered == ["$NVDA", "$AAPL", "$BRK.B", "$SMH"]
+
+
+def test_analyzer_retries_on_parse_failure_and_succeeds():
+    analyzer = MarketImpactAnalyzer(max_retries=3)
+    article = RawArticle(
+        title="Parse Failure Then Success",
+        url="https://example.com/retry-parse",
+        source_name="Bloomberg",
+        published_at=None,
+        summary="Summary test"
+    )
+
+    with patch("litellm.completion") as mock_completion, \
+         patch("time.sleep") as mock_sleep:
+        # 1st attempt: invalid JSON (parse error)
+        # 2nd attempt: valid JSON
+        mock_completion.side_effect = [
+            {"choices": [{"message": {"content": "Not valid JSON output"}}]},
+            {"choices": [{"message": {"content": MOCK_LLM_JSON}}]}
+        ]
+
+        result = analyzer.analyze(article)
+        assert result.is_market_moving is True
+        assert result.impact_grade == ImpactGrade.CRITICAL
+        assert mock_completion.call_count == 2
+        assert mock_sleep.call_count == 1
+
+
+def test_analyzer_parses_markdown_json_with_preamble_and_postamble():
+    analyzer = MarketImpactAnalyzer()
+    article = RawArticle(
+        title="Preamble and Postamble Test",
+        url="https://example.com/preamble-test",
+        source_name="Reuters",
+        published_at=None,
+        summary="Summary"
+    )
+
+    llm_output_with_text = f"""Here is the market impact analysis for the headline:
+```json
+{MOCK_LLM_JSON}
+```
+Please let me know if you would like deeper channel checks on the supply chain.
+"""
+
+    with patch("litellm.completion") as mock_completion:
+        mock_completion.return_value = {
+            "choices": [{"message": {"content": llm_output_with_text}}]
+        }
+        result = analyzer.analyze(article)
+        assert result.is_market_moving is True
+        assert result.confidence_score == 9
+        assert result.impact_grade == ImpactGrade.CRITICAL
+        assert "$NVDA" in result.affected_tickers
+

@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import time
 from typing import Any, Dict, Optional, Union
 
@@ -18,17 +19,26 @@ class AnalysisError(Exception):
 
 
 def clean_json_markdown(text: str) -> str:
-    """Strips markdown code block fences and surrounding whitespace."""
+    """Robustly extracts and strips JSON from markdown code blocks or surrounding text."""
     s = text.strip()
-    if s.startswith("```"):
-        lines = s.splitlines()
-        # Remove opening ``` or ```json
-        if lines and lines[0].strip().startswith("```"):
-            lines = lines[1:]
-        # Remove closing ```
-        if lines and lines[-1].strip().startswith("```"):
-            lines = lines[:-1]
-        s = "\n".join(lines).strip()
+    
+    # 1. Check for markdown code fences (```json ... ``` or ``` ... ```)
+    code_block_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", s, re.IGNORECASE)
+    if code_block_match:
+        block_content = code_block_match.group(1).strip()
+        # Find outermost { and } within the matched block
+        start = block_content.find("{")
+        end = block_content.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            return block_content[start:end + 1].strip()
+        return block_content
+
+    # 2. Check for outermost { and } in raw text with potential preamble / postamble
+    start = s.find("{")
+    end = s.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return s[start:end + 1].strip()
+
     return s
 
 
@@ -58,7 +68,7 @@ class MarketImpactAnalyzer:
         self.fallback_on_error = fallback_on_error
 
     def analyze(self, article: RawArticle) -> MarketImpactAnalysis:
-        """Analyzes an article using litellm with exponential backoff retries."""
+        """Analyzes an article using litellm with exponential backoff retries on API & parse errors."""
         system_prompt, user_prompt = build_analyst_prompt(article)
         messages = [
             {"role": "system", "content": system_prompt},
@@ -84,13 +94,10 @@ class MarketImpactAnalyzer:
                 )
                 raw_content = self._extract_content(response)
                 return self._parse_and_validate(raw_content, article)
-            except AnalysisError:
-                # If parsing/validation failed inside _parse_and_validate
-                raise
             except Exception as e:
                 last_error = e
                 logger.warning(
-                    "LLM request error on attempt %d/%d: %s",
+                    "LLM analysis attempt %d/%d failed (API or parse error): %s",
                     attempt,
                     self.max_retries,
                     e,
@@ -100,7 +107,7 @@ class MarketImpactAnalyzer:
                     current_delay *= self.backoff_factor
 
         # All retries failed
-        error_msg = f"LLM API request failed after {self.max_retries} retries: {last_error}"
+        error_msg = f"LLM analysis failed after {self.max_retries} retries (unparseable JSON or API error): {last_error}"
         logger.error(error_msg)
         if self.fallback_on_error:
             return self._build_fallback(article, error_msg)
@@ -123,26 +130,23 @@ class MarketImpactAnalyzer:
             raise ValueError("LLM returned empty content.")
         return content
 
-    def _parse_and_validate(self, content: Union[str, Dict[str, Any]], article: RawArticle) -> MarketImpactAnalysis:
-        """Cleans, parses, validates JSON, and cleans tradeable tickers."""
-        try:
-            if isinstance(content, dict):
-                data = dict(content)
-            else:
-                cleaned_str = clean_json_markdown(str(content))
-                data = json.loads(cleaned_str)
+    def _parse_and_validate(
+        self,
+        content: Union[str, Dict[str, Any]],
+        article: Optional[RawArticle] = None,
+    ) -> MarketImpactAnalysis:
+        """Cleans, parses, validates JSON, and sanitizes tradeable tickers."""
+        if isinstance(content, dict):
+            data = dict(content)
+        else:
+            cleaned_str = clean_json_markdown(str(content))
+            data = json.loads(cleaned_str)
 
-            # Sanitize tickers
-            raw_tickers = data.get("affected_tickers", [])
-            data["affected_tickers"] = filter_valid_tickers(raw_tickers)
+        # Sanitize tickers
+        raw_tickers = data.get("affected_tickers", [])
+        data["affected_tickers"] = filter_valid_tickers(raw_tickers)
 
-            return MarketImpactAnalysis.model_validate(data)
-        except Exception as e:
-            msg = f"Failed to parse LLM response JSON into MarketImpactAnalysis (unparseable): {e}"
-            logger.error("%s | Content: %s", msg, content)
-            if self.fallback_on_error:
-                return self._build_fallback(article, msg)
-            raise AnalysisError(msg) from e
+        return MarketImpactAnalysis.model_validate(data)
 
     def _build_fallback(self, article: RawArticle, reason: str) -> MarketImpactAnalysis:
         """Produces a conservative, structured non-market-moving fallback analysis."""
