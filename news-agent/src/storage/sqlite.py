@@ -1,7 +1,7 @@
 import json
 import sqlite3
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -63,7 +63,9 @@ class SQLiteStorage(BaseStorage):
                         invalidation_conditions TEXT,
                         passes_hard_gates INTEGER,
                         corroborating_sources TEXT,
-                        corroboration_count INTEGER DEFAULT 1
+                        corroboration_count INTEGER DEFAULT 1,
+                        sec_filing_item TEXT,
+                        surge_level TEXT
                     );
                     """
                 )
@@ -105,6 +107,8 @@ class SQLiteStorage(BaseStorage):
                     ("passes_hard_gates", "INTEGER"),
                     ("corroborating_sources", "TEXT"),
                     ("corroboration_count", "INTEGER"),
+                    ("sec_filing_item", "TEXT"),
+                    ("surge_level", "TEXT"),
                 ]
                 for col_name, col_type in new_columns:
                     if col_name not in existing_cols:
@@ -114,6 +118,7 @@ class SQLiteStorage(BaseStorage):
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_articles_is_market_moving ON articles(is_market_moving);")
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_articles_created_at ON articles(created_at);")
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_articles_status ON articles(status);")
+                self._conn.execute("CREATE INDEX IF NOT EXISTS idx_articles_surge_level ON articles(surge_level);")
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_metrics_created_at ON llm_metrics(created_at);")
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_metrics_content_hash ON llm_metrics(content_hash);")
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_metrics_model_name ON llm_metrics(model_name);")
@@ -234,6 +239,20 @@ class SQLiteStorage(BaseStorage):
             if analysis and analysis.corroboration_count is not None
             else 1
         )
+        sec_filing_item = (
+            analysis.sec_filing_item.value
+            if analysis and hasattr(analysis.sec_filing_item, "value")
+            else str(analysis.sec_filing_item)
+            if analysis and analysis.sec_filing_item is not None
+            else None
+        )
+        surge_level = (
+            analysis.surge_level.value
+            if analysis and hasattr(analysis.surge_level, "value")
+            else str(analysis.surge_level)
+            if analysis and analysis.surge_level is not None
+            else None
+        )
 
         sql = """
         INSERT INTO articles (
@@ -258,8 +277,10 @@ class SQLiteStorage(BaseStorage):
             invalidation_conditions,
             passes_hard_gates,
             corroborating_sources,
-            corroboration_count
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            corroboration_count,
+            sec_filing_item,
+            surge_level
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(content_hash) DO UPDATE SET
             url = excluded.url,
             title = excluded.title,
@@ -280,7 +301,9 @@ class SQLiteStorage(BaseStorage):
             invalidation_conditions = COALESCE(excluded.invalidation_conditions, articles.invalidation_conditions),
             passes_hard_gates = COALESCE(excluded.passes_hard_gates, articles.passes_hard_gates),
             corroborating_sources = COALESCE(excluded.corroborating_sources, articles.corroborating_sources),
-            corroboration_count = COALESCE(excluded.corroboration_count, articles.corroboration_count)
+            corroboration_count = COALESCE(excluded.corroboration_count, articles.corroboration_count),
+            sec_filing_item = COALESCE(excluded.sec_filing_item, articles.sec_filing_item),
+            surge_level = COALESCE(excluded.surge_level, articles.surge_level)
         """
         with self._lock:
             if self._conn is None:
@@ -311,6 +334,8 @@ class SQLiteStorage(BaseStorage):
                         passes_hard_gates,
                         corroborating_sources,
                         corroboration_count,
+                        sec_filing_item,
+                        surge_level,
                     ),
                 )
 
@@ -478,7 +503,59 @@ class SQLiteStorage(BaseStorage):
                 "spend_this_month": spend_this_month,
             }
 
+    def get_recent_catalysts(self, hours: int = 24) -> List[Dict[str, Any]]:
+        """Retrieve recorded articles from the past `hours` where alerted=1 or status='OPPORTUNITY_CANDIDATE'."""
+        cutoff_dt = datetime.now(timezone.utc) - timedelta(hours=hours)
+        cutoff_iso = cutoff_dt.isoformat()
+
+        sql = """
+        SELECT
+            content_hash,
+            url,
+            title,
+            source_name,
+            published_at,
+            created_at,
+            is_market_moving,
+            confidence_score,
+            impact_grade,
+            tickers,
+            sectors,
+            alerted,
+            status,
+            directional_stance,
+            causal_mechanism,
+            beneficiaries,
+            negatively_exposed,
+            counterarguments,
+            invalidation_conditions,
+            passes_hard_gates,
+            corroborating_sources,
+            corroboration_count,
+            sec_filing_item,
+            surge_level
+        FROM articles
+        WHERE (alerted = 1 OR status = 'OPPORTUNITY_CANDIDATE')
+          AND (created_at >= ? OR (published_at IS NOT NULL AND published_at >= ?))
+        ORDER BY confidence_score DESC, created_at DESC;
+        """
+        with self._lock:
+            if self._conn is None:
+                raise RuntimeError("Database connection is closed.")
+            cursor = self._conn.cursor()
+            cursor.execute(sql, (cutoff_iso, cutoff_iso))
+            rows = cursor.fetchall()
+            results: List[Dict[str, Any]] = []
+            for r in rows:
+                if isinstance(r, sqlite3.Row):
+                    results.append(dict(r))
+                else:
+                    col_names = [col[0] for col in cursor.description]
+                    results.append(dict(zip(col_names, r)))
+            return results
+
     def close(self) -> None:
+
         """Close SQLite database connection cleanly and reset reference for fail-fast behavior."""
         with self._lock:
             if hasattr(self, "_conn") and self._conn is not None:

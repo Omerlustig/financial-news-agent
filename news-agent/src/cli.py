@@ -22,6 +22,7 @@ from src.ingestion.rss import RSSFetcher
 from src.notification.telegram import TelegramNotifier
 from src.pipeline import Pipeline
 from src.storage.sqlite import SQLiteStorage
+from src.analysis.digest import MarketDigestGenerator
 
 logging.basicConfig(
     level=logging.INFO,
@@ -384,5 +385,43 @@ def metrics(
         storage.close()
 
 
+@app.command("digest")
+def digest(
+    hours: int = typer.Option(24, "--hours", "-h", help="Time window in hours to summarize catalysts"),
+    send_telegram: bool = typer.Option(False, "--send-telegram", help="Push the generated digest to Telegram channel"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to settings.yaml"),
+    db: Optional[str] = typer.Option(None, "--db", help="Override SQLite database path"),
+) -> None:
+    """Generate executive daily market catalyst digest grouped by sector."""
+    settings = load_settings(config)
+    db_path = db or settings.agent.database_path
+
+    storage = SQLiteStorage(db_path)
+    try:
+        generator = MarketDigestGenerator()
+        digest_text = generator.generate_digest(storage=storage, hours=hours)
+
+        console.print()
+        console.print(digest_text)
+        console.print()
+
+        if send_telegram:
+            notifier = TelegramNotifier(
+                bot_token=settings.telegram.bot_token,
+                chat_id=settings.telegram.chat_id,
+            )
+            if not notifier.is_configured:
+                console.print("[bold red]Telegram bot_token or chat_id is unconfigured. Cannot dispatch digest.[/bold red]")
+            else:
+                success = notifier.send_message(digest_text)
+                if success:
+                    console.print("[bold green]✓ Market catalyst digest dispatched to Telegram successfully.[/bold green]")
+                else:
+                    console.print("[bold red]✗ Failed to dispatch market catalyst digest to Telegram.[/bold red]")
+    finally:
+        storage.close()
+
+
 if __name__ == "__main__":
     app()
+

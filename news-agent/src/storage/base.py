@@ -60,6 +60,12 @@ class BaseStorage(ABC):
         """Return aggregate LLM usage telemetry and expenditure metrics."""
         raise NotImplementedError
 
+    @abstractmethod
+    def get_recent_catalysts(self, hours: int = 24) -> List[Dict[str, Any]]:
+        """Retrieve recorded articles from the past `hours` where alerted=1 or status='OPPORTUNITY_CANDIDATE'."""
+        raise NotImplementedError
+
+
     def close(self) -> None:
         """Release storage connections or system resources."""
         pass

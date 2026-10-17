@@ -9,6 +9,7 @@ from src.storage.base import BaseStorage
 from src.storage.sqlite import SQLiteStorage
 from src.analysis.analyzer import MarketImpactAnalyzer
 from src.analysis.corroborator import EventCorroborator
+from src.analysis.surge import SurgeVelocityEngine
 from src.notification.base import BaseNotifier
 from src.notification.telegram import TelegramNotifier
 
@@ -66,6 +67,7 @@ class Pipeline:
         analyzer: Optional[MarketImpactAnalyzer] = None,
         notifier: Optional[BaseNotifier] = None,
         corroborator: Optional[EventCorroborator] = None,
+        surge_engine: Optional[SurgeVelocityEngine] = None,
         sources: Optional[List[SourceConfig]] = None,
         fetcher: Optional[Callable[[], List[RawArticle]]] = None,
         min_score: Optional[int] = None,
@@ -79,6 +81,8 @@ class Pipeline:
         self.fetch_timeout = fetch_timeout
         self.fetcher = fetcher
         self.corroborator = corroborator if corroborator is not None else EventCorroborator()
+        self.surge_engine = surge_engine if surge_engine is not None else SurgeVelocityEngine()
+
 
         # Threshold resolution: min_score takes precedence over min_confidence_score
         if min_score is not None:
@@ -267,6 +271,10 @@ class Pipeline:
 
             # Apply multi-source corroboration weights, validation boost & source tracking
             analysis = self.corroborator.corroborate_analysis(analysis, cluster)
+
+            # Apply surge velocity detection
+            surge_level = self.surge_engine.detect_surge(cluster)
+            analysis = self.surge_engine.apply_surge_metadata(analysis, surge_level)
 
             # Record LLM observability and token usage telemetry
             if analysis.token_usage is not None and self.storage is not None:

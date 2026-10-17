@@ -14,6 +14,9 @@ from src.models import (
     DirectionalStance,
     CausalChain,
     HardGates,
+    SECFilingItem,
+    SurgeLevel,
+    TelegramButton,
 )
 
 
@@ -482,6 +485,8 @@ def test_storage_schema_migration_safety(tmp_path):
         "counterarguments",
         "invalidation_conditions",
         "passes_hard_gates",
+        "sec_filing_item",
+        "surge_level",
     ]:
         assert expected_col in col_names
 
@@ -687,6 +692,107 @@ def test_record_article_persists_corroboration_fields(tmp_path):
     assert sources == ["Bloomberg", "MarketWatch", "Reuters"]
 
     storage.close()
+
+
+def test_record_article_persists_sec_filing_and_surge_level(tmp_path):
+    db_path = str(tmp_path / "sec_surge_test.db")
+    storage = SQLiteStorage(db_path)
+
+    art = RawArticle(
+        title="Acme Corp Files Item 1.01 Material Agreement",
+        url="https://sec.gov/edgar/data/12345/acme-8k",
+        source_name="SEC Edgar",
+    )
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=9,
+        impact_grade=ImpactGrade.CRITICAL,
+        affected_tickers=["$ACME"],
+        affected_sectors=["Technology"],
+        summary="Acme enters into material definitive acquisition agreement.",
+        catalyst_thesis="Acquisition expands total addressable market by 40%.",
+        status=EventStatus.OPPORTUNITY_CANDIDATE,
+        sec_filing_item=SECFilingItem.ITEM_1_01_MATERIAL_AGREEMENT,
+        surge_level=SurgeLevel.SURGE_BREAKING,
+        interactive_buttons=[
+            TelegramButton(text="View 8-K", url="https://sec.gov/edgar/data/12345/acme-8k"),
+            TelegramButton(text="Charts", url="https://tradingview.com/chart/?symbol=ACME"),
+        ],
+    )
+
+    storage.record_article(art, analysis, alerted=True)
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT * FROM articles WHERE content_hash = ?", (art.content_hash,)).fetchone()
+    conn.close()
+
+    assert row is not None
+    assert row["sec_filing_item"] == SECFilingItem.ITEM_1_01_MATERIAL_AGREEMENT.value
+    assert row["surge_level"] == "SURGE_BREAKING"
+
+    # Also test record without analysis preserves None
+    art_no_analysis = RawArticle(
+        title="Routine Press Release",
+        url="https://example.com/routine",
+        source_name="PR Newswire",
+    )
+    storage.record_article(art_no_analysis, analysis=None, alerted=False)
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    row_no_analysis = conn.execute("SELECT * FROM articles WHERE content_hash = ?", (art_no_analysis.content_hash,)).fetchone()
+    conn.close()
+
+    assert row_no_analysis is not None
+    assert row_no_analysis["sec_filing_item"] is None
+    assert row_no_analysis["surge_level"] is None
+
+    storage.close()
+
+
+def test_sec_and_surge_model_contracts():
+    # Verify SECFilingItem values
+    assert SECFilingItem.ITEM_1_01_MATERIAL_AGREEMENT.value == "Item 1.01: Entry into Material Definitive Agreement (M&A / Partnership)"
+    assert SECFilingItem.ITEM_1_02_TERMINATION_AGREEMENT.value == "Item 1.02: Termination of a Material Agreement"
+    assert SECFilingItem.ITEM_2_02_EARNINGS_OPERATIONS.value == "Item 2.02: Results of Operations and Financial Condition"
+    assert SECFilingItem.ITEM_4_02_ACCOUNTING_RESTATEMENT.value == "Item 4.02: Non-Reliance on Previously Issued Financial Statements (Restatement)"
+    assert SECFilingItem.ITEM_5_02_EXECUTIVE_CHANGE.value == "Item 5.02: Departure / Election of Key Officers or Directors"
+    assert SECFilingItem.ITEM_GENERAL.value == "General Corporate Disclosure"
+
+    # Verify SurgeLevel values
+    assert SurgeLevel.NORMAL.value == "NORMAL"
+    assert SurgeLevel.ELEVATED.value == "ELEVATED"
+    assert SurgeLevel.SURGE_BREAKING.value == "SURGE_BREAKING"
+
+    # Verify default surge_level and buttons on MarketImpactAnalysis
+    analysis = MarketImpactAnalysis(
+        is_market_moving=False,
+        confidence_score=2,
+        impact_grade=ImpactGrade.LOW,
+        summary="Minor update",
+        catalyst_thesis="No material market impact expected.",
+    )
+    assert analysis.surge_level == SurgeLevel.NORMAL
+    assert analysis.sec_filing_item is None
+    assert analysis.interactive_buttons == []
+
+    # Verify normalization with string values
+    analysis_str = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=8,
+        impact_grade=ImpactGrade.HIGH,
+        summary="Breaking earnings",
+        catalyst_thesis="Revenue beat by 20%.",
+        sec_filing_item="Item 2.02: Results of Operations and Financial Condition",
+        surge_level="elevated",
+        interactive_buttons=[TelegramButton(text="Details", url="https://example.com")],
+    )
+    assert analysis_str.surge_level == SurgeLevel.ELEVATED
+    assert analysis_str.sec_filing_item == SECFilingItem.ITEM_2_02_EARNINGS_OPERATIONS.value
+    assert len(analysis_str.interactive_buttons) == 1
+    assert analysis_str.interactive_buttons[0].text == "Details"
+
 
 
 

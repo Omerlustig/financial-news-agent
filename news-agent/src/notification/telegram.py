@@ -2,11 +2,17 @@ import html
 import logging
 import re
 import time
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 import requests
 
-from src.models import RawArticle, MarketImpactAnalysis, ImpactGrade
+from src.models import (
+    ImpactGrade,
+    MarketImpactAnalysis,
+    RawArticle,
+    SurgeLevel,
+    TelegramButton,
+)
 from src.notification.base import BaseNotifier
 
 logger = logging.getLogger(__name__)
@@ -116,9 +122,13 @@ def format_telegram_message(
     )
     score = analysis.confidence_score if analysis.confidence_score is not None else 0
 
-    lines = [
+    lines: List[str] = []
+    if getattr(analysis, "surge_level", None) == SurgeLevel.SURGE_BREAKING:
+        lines.append("<b>⚡ [BREAKING CATALYST SURGE]</b>")
+
+    lines.append(
         f"🚨 <b>[OPPORTUNITY CANDIDATE | Score: {score}/10 | {escape_html(grade_name)}]</b>"
-    ]
+    )
 
     # Stance & Time Horizon
     stance = directional_stance or getattr(analysis, "directional_stance", None) or getattr(analysis, "stance", None)
@@ -154,6 +164,12 @@ def format_telegram_message(
         sectors = analysis.affected_sectors
     sectors_str = ", ".join(sectors) if sectors else "None"
     lines.append(f"🏭 <b>Sectors:</b> {escape_html(sectors_str)}")
+
+    # SEC / TASE Regulatory Disclosure
+    if getattr(analysis, "sec_filing_item", None):
+        filing_val = getattr(analysis.sec_filing_item, "value", str(analysis.sec_filing_item))
+        lines.append(f"🏛️ <b>Filing:</b> {escape_html(filing_val)}")
+
 
     # Headline, Publisher, and UTC Timestamp
     pub_time = article.published_at.strftime("%Y-%m-%d %H:%M UTC") if article.published_at else "N/A"
@@ -279,7 +295,7 @@ class TelegramNotifier(BaseNotifier):
         return s
 
     def send_alert(self, article: RawArticle, analysis: MarketImpactAnalysis) -> bool:
-        """Format and dispatch an alert for a market-moving event.
+        """Format and dispatch an alert for a market-moving event with interactive inline buttons.
 
         Args:
             article: Normalized article metadata.
@@ -290,16 +306,53 @@ class TelegramNotifier(BaseNotifier):
         """
         try:
             message = format_telegram_message(article, analysis)
-            return self.send_message(message)
+
+            button_row: List[Dict[str, str]] = []
+
+            # 1. Read Full Article
+            if article.url:
+                button_row.append({
+                    "text": "🔗 Read Full Article",
+                    "url": article.url,
+                })
+
+            # 2. Charts for first 1-2 tradeable tickers
+            if analysis.affected_tickers:
+                for ticker in analysis.affected_tickers[:2]:
+                    ticker_clean = ticker.lstrip("$").strip().upper()
+                    if ticker_clean:
+                        button_row.append({
+                            "text": f"📊 Chart {ticker}",
+                            "url": f"https://www.tradingview.com/symbols/{ticker_clean}/",
+                        })
+
+            # 3. SEC / TASE Regulatory Disclosure
+            if analysis.sec_filing_item and article.url:
+                button_row.append({
+                    "text": "🏛️ SEC / TASE Disclosure",
+                    "url": article.url,
+                })
+
+            reply_markup: Optional[Dict[str, Any]] = (
+                {"inline_keyboard": [button_row]} if button_row else None
+            )
+
+            if not analysis.interactive_buttons and button_row:
+                analysis.interactive_buttons = [
+                    TelegramButton(text=b["text"], url=b["url"]) for b in button_row
+                ]
+
+            return self.send_message(message, reply_markup=reply_markup)
         except Exception as exc:
             logger.error("Failed to construct or dispatch Telegram alert: %s", self._redact_token(exc))
             return False
 
-    def send_message(self, text: str) -> bool:
+    def send_message(self, text: str, reply_markup: Optional[Dict[str, Any]] = None) -> bool:
         """Send a message string to Telegram with retry backoff for rate limits.
 
         Args:
             text: Formatted message payload.
+            reply_markup: Optional Telegram reply markup dict (e.g. inline_keyboard).
 
         Returns:
             bool: True if Telegram API returns ok=True, False otherwise.
@@ -312,12 +365,15 @@ class TelegramNotifier(BaseNotifier):
             return False
 
         endpoint = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
-        payload = {
+        payload: Dict[str, Any] = {
             "chat_id": self.chat_id,
             "text": text,
             "parse_mode": self.parse_mode,
             "disable_web_page_preview": False,
         }
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
+
 
         retries = 0
         while retries <= self.max_retries:

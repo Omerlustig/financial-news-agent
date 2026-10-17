@@ -12,7 +12,10 @@ from src.models import (
     TimeHorizon,
     EventStatus,
     HardGates,
+    SurgeLevel,
+    SECFilingItem,
 )
+
 from src.notification.base import BaseNotifier
 from src.notification.telegram import (
     TelegramNotifier,
@@ -520,5 +523,125 @@ def test_telegram_message_formatting_corroboration_badge():
     )
     msg = format_telegram_message(article, analysis)
     assert "📡 <b>Corroborated by:</b> Bloomberg, MarketWatch, Reuters (3 independent sources)" in msg
+
+
+def test_telegram_message_formatting_surge_breaking_badge():
+    """Verify SURGE_BREAKING level produces breaking badge in header."""
+    article = RawArticle(
+        title="Breaking Semiconductor Breakthrough",
+        url="https://reuters.com/semi-breakthrough",
+        source_name="Reuters",
+    )
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=9,
+        impact_grade=ImpactGrade.CRITICAL,
+        affected_tickers=["$NVDA"],
+        affected_sectors=["Semiconductors"],
+        summary="Major breakthrough.",
+        catalyst_thesis="Disruptive advance.",
+        surge_level=SurgeLevel.SURGE_BREAKING,
+    )
+    msg = format_telegram_message(article, analysis)
+    assert "⚡ [BREAKING CATALYST SURGE]" in msg
+
+
+def test_telegram_message_formatting_sec_filing_item():
+    """Verify SEC filing classification item is rendered when present."""
+    article = RawArticle(
+        title="Form 8-K Definitive Agreement Filed",
+        url="https://sec.gov/filing/123",
+        source_name="SEC EDGAR",
+    )
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=9,
+        impact_grade=ImpactGrade.HIGH,
+        affected_tickers=["$MSFT"],
+        affected_sectors=["Technology"],
+        summary="Definitive agreement disclosed.",
+        catalyst_thesis="Material acquisition.",
+        sec_filing_item=SECFilingItem.ITEM_1_01_MATERIAL_AGREEMENT,
+    )
+    msg = format_telegram_message(article, analysis)
+    assert "🏛️ <b>Filing:</b> Item 1.01: Entry into Material Definitive Agreement (M&amp;A / Partnership)" in msg
+
+
+
+def test_telegram_send_alert_inline_keyboard_payload():
+    """Verify send_alert constructs inline_keyboard with Read Article, Chart buttons, and SEC Disclosure."""
+    article = RawArticle(
+        title="Major Tech Merger Announced",
+        url="https://reuters.com/tech-merger",
+        source_name="Reuters",
+    )
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=9,
+        impact_grade=ImpactGrade.HIGH,
+        affected_tickers=["$NVDA", "$AMD", "$INTC"],
+        affected_sectors=["Semiconductors"],
+        summary="Merger agreement entered.",
+        catalyst_thesis="Synergies.",
+        sec_filing_item=SECFilingItem.ITEM_1_01_MATERIAL_AGREEMENT,
+    )
+
+    notifier = TelegramNotifier(bot_token="test-bot-token", chat_id="123456")
+
+    with patch("src.notification.telegram.requests.post") as mock_post:
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"ok": True}
+        mock_post.return_value = mock_response
+
+        ok = notifier.send_alert(article, analysis)
+        assert ok is True
+        assert mock_post.called
+
+        _, kwargs = mock_post.call_args
+        payload = kwargs.get("json", {})
+
+        assert "reply_markup" in payload
+        reply_markup = payload["reply_markup"]
+        assert "inline_keyboard" in reply_markup
+
+        row = reply_markup["inline_keyboard"][0]
+        # Button 1: Read Full Article
+        assert row[0]["text"] == "🔗 Read Full Article"
+        assert row[0]["url"] == "https://reuters.com/tech-merger"
+
+        # Button 2 & 3: First 1-2 tickers
+        assert row[1]["text"] == "📊 Chart $NVDA"
+        assert row[1]["url"] == "https://www.tradingview.com/symbols/NVDA/"
+        assert row[2]["text"] == "📊 Chart $AMD"
+        assert row[2]["url"] == "https://www.tradingview.com/symbols/AMD/"
+
+        # Button 4: SEC Disclosure
+        assert row[3]["text"] == "🏛️ SEC / TASE Disclosure"
+        assert row[3]["url"] == "https://reuters.com/tech-merger"
+
+        # 3rd ticker ($INTC) should be omitted
+        button_texts = [b["text"] for b in row]
+        assert not any("INTC" in t for t in button_texts)
+
+
+def test_telegram_send_message_with_reply_markup():
+    """Verify send_message forwards reply_markup payload to Telegram API."""
+    notifier = TelegramNotifier(bot_token="test-bot-token", chat_id="123456")
+
+    with patch("src.notification.telegram.requests.post") as mock_post:
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"ok": True}
+        mock_post.return_value = mock_response
+
+        markup = {"inline_keyboard": [[{"text": "Custom", "url": "https://custom.com"}]]}
+        ok = notifier.send_message("Test with markup", reply_markup=markup)
+        assert ok is True
+
+        _, kwargs = mock_post.call_args
+        payload = kwargs.get("json", {})
+        assert payload.get("reply_markup") == markup
+
 
 

@@ -51,6 +51,11 @@ flowchart TD
   - Confidence score receives an institutional credibility boost (+1 to +2 points).
   - Status is elevated to `OPPORTUNITY_CANDIDATE`.
   - Dispatches **ONE single consolidated Telegram alert** citing all corroborating outlets (`📡 Corroborated by: [Reuters, Bloomberg, MarketWatch]`)—preventing redundant notification spam.
+- **Publication Velocity Surge Engine**: Monitors publication velocity and time deltas across reporting outlets. Rapid reporting across 3+ outlets within 30 minutes triggers `⚡ [BREAKING CATALYST SURGE]`, auto-promoting confidence score to >= 8 and escalating impact grade to `HIGH` or `CRITICAL`.
+- **Full-Text Article Extraction Engine**: Powered by `trafilatura` with graceful fallback to BeautifulSoup and regex parsing, enabling deep-dive financial reasoning beyond brief RSS teaser snippets.
+- **Regulatory Disclosure Taxonomy (SEC 8-K & Israeli MAYA)**: Dedicated classifier mapping SEC 8-K filing items (Item 1.01 M&A/Partnerships, Item 1.02 contract terminations, Item 2.02 earnings, Item 4.02 restatements, Item 5.02 executive changes) and TASE/MAYA corporate disclosures to deterministic baseline impact severities.
+- **Interactive Telegram Inline Keyboards**: Actionable one-tap inline buttons on every alert, deep-linking directly to the primary source article, live TradingView technical charts (`https://www.tradingview.com/symbols/{TICKER}/`), and regulatory filings.
+- **Executive Daily Catalyst Digest**: Periodic sector-grouped briefing generator aggregating all verified catalysts, directional stances, and transmission channels over any rolling lookback window (e.g. 24h).
 - **Resilient Network Ingestion & Auto-Retries**: Configurable automatic retries with exponential backoff on network timeouts, DNS drops, or HTTP 5xx errors, plus HTTP 304 conditional GET (`ETag`/`Last-Modified`) feed caching to skip unchanged feeds.
 - **Zero Duplicate Processing (Multi-Tier Deduplication)**: Automatic URL canonicalization (stripping tracking parameters like `utm_*`, `ref`, and `fbclid`), deterministic SHA-256 content hashing (`url + title`), and SQLite WAL persistence of both alerted and non-alerted articles guarantee an article is never re-analyzed or re-alerted.
 - **Multi-LLM Support & Auto-Failover**: Powered by `litellm`—primary model delegation (`gemini/gemini-1.5-flash`) with automatic failover to secondary fallback models (e.g. `gpt-4o-mini`) on provider rate limits or downtime.
@@ -500,6 +505,8 @@ The agent includes full diagnostic utilities for real-time inspection and verifi
 | `python -m src.main test-source --name "<name>"` | Fetches and displays the top 5 parsed headlines from a single feed. |
 | `python -m src.main stats` | Displays total seen articles, market-moving detections, and alert counts. |
 | `python -m src.main metrics` | Displays total LLM inference counts, tokens, estimated spend, and model breakdown. |
+| `python -m src.main digest --hours 24` | Generates a 24-hour sector-grouped catalyst executive digest to the console. |
+| `python -m src.main digest --hours 24 --send-telegram` | Generates and broadcasts the 24-hour catalyst briefing directly to Telegram. |
 
 ---
 

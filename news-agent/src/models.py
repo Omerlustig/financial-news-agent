@@ -96,6 +96,47 @@ class TimeHorizon(str, Enum):
         return super()._missing_(value)
 
 
+class SECFilingItem(str, Enum):
+    """SEC 8-K item classifications for regulatory filings."""
+    ITEM_1_01_MATERIAL_AGREEMENT = "Item 1.01: Entry into Material Definitive Agreement (M&A / Partnership)"
+    ITEM_1_02_TERMINATION_AGREEMENT = "Item 1.02: Termination of a Material Agreement"
+    ITEM_2_02_EARNINGS_OPERATIONS = "Item 2.02: Results of Operations and Financial Condition"
+    ITEM_4_02_ACCOUNTING_RESTATEMENT = "Item 4.02: Non-Reliance on Previously Issued Financial Statements (Restatement)"
+    ITEM_5_02_EXECUTIVE_CHANGE = "Item 5.02: Departure / Election of Key Officers or Directors"
+    ITEM_GENERAL = "General Corporate Disclosure"
+
+    def __str__(self) -> str:
+        return self.value
+
+    @classmethod
+    def _missing_(cls, value: object) -> Any:
+        if isinstance(value, str):
+            normalized = value.strip().upper()
+            for member in cls:
+                if member.value.upper() == normalized or member.name.upper() == normalized:
+                    return member
+        return super()._missing_(value)
+
+
+class SurgeLevel(str, Enum):
+    """Corroboration surge velocity levels."""
+    NORMAL = "NORMAL"
+    ELEVATED = "ELEVATED"
+    SURGE_BREAKING = "SURGE_BREAKING"
+
+    def __str__(self) -> str:
+        return self.value
+
+    @classmethod
+    def _missing_(cls, value: object) -> Any:
+        if isinstance(value, str):
+            normalized = value.strip().upper()
+            for member in cls:
+                if member.value == normalized:
+                    return member
+        return super()._missing_(value)
+
+
 import urllib.parse
 
 TRACKING_QUERY_PARAMS = {
@@ -225,6 +266,12 @@ class TokenUsage(BaseModel):
     model_name: str = Field(default="", description="Identifier of the model used.")
 
 
+class TelegramButton(BaseModel):
+    """Inline URL button for Telegram notifications."""
+    text: str = Field(..., description="Button display label text.")
+    url: str = Field(..., description="Target URL opened upon button click.")
+
+
 class MarketImpactAnalysis(BaseModel):
     """Institutional financial analyst reasoning and scoring output."""
     is_market_moving: bool = Field(
@@ -293,10 +340,42 @@ class MarketImpactAnalysis(BaseModel):
         default=1,
         description="Number of distinct sources reporting this catalyst."
     )
+    sec_filing_item: Optional[str] = Field(
+        default=None,
+        description="SEC 8-K regulatory item classification if applicable."
+    )
+    surge_level: SurgeLevel = Field(
+        default=SurgeLevel.NORMAL,
+        description="Corroboration surge velocity level (NORMAL, ELEVATED, SURGE_BREAKING)."
+    )
+    interactive_buttons: List[TelegramButton] = Field(
+        default_factory=list,
+        description="Interactive action buttons attached to notification alert."
+    )
     disclaimer: str = Field(
         default="⚠️ News-derived hypothesis. Market pricing, valuation, and entry points were not checked.",
         description="Mandatory compliance disclaimer separating news inference from trading validation."
     )
+
+    @field_validator("sec_filing_item", mode="before")
+    @classmethod
+    def normalize_sec_filing_item(cls, v: Any) -> Optional[str]:
+        if v is None:
+            return None
+        if isinstance(v, SECFilingItem):
+            return v.value
+        return str(v)
+
+    @field_validator("surge_level", mode="before")
+    @classmethod
+    def normalize_surge_level(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            cleaned = v.strip().upper()
+            try:
+                return SurgeLevel(cleaned)
+            except ValueError:
+                return v
+        return v
 
     @field_validator("status", mode="before")
     @classmethod

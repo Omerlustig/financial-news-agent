@@ -20,6 +20,8 @@ from src.models import (
 from src.config import LLMSettings
 from src.storage.base import BaseStorage
 from src.analysis.prompts import build_analyst_prompt, filter_valid_tickers
+from src.analysis.taxonomy import SECTaxonomyClassifier
+
 
 logger = logging.getLogger(__name__)
 
@@ -277,7 +279,18 @@ class MarketImpactAnalyzer:
                 else:
                     data["status"] = EventStatus.WATCHLIST.value
 
+        # Infer sec_filing_item if missing from LLM response
+        if article and not data.get("sec_filing_item"):
+            sec_item, _, _ = SECTaxonomyClassifier.classify_sec_item(article.title, article.summary or "")
+            if sec_item:
+                data["sec_filing_item"] = sec_item.value
+            else:
+                maya_cat, _, _ = SECTaxonomyClassifier.classify_maya_report(article.title, article.summary or "")
+                if maya_cat:
+                    data["sec_filing_item"] = f"MAYA: {maya_cat}"
+
         return MarketImpactAnalysis.model_validate(data)
+
 
     def _build_fallback(self, article: RawArticle, reason: str) -> MarketImpactAnalysis:
         """Produces a conservative, structured non-market-moving fallback analysis with compliant CausalChain and HardGates."""

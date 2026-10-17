@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from typing import Any, Dict, Optional
 from src.models import RawArticle, MarketImpactAnalysis
 
 
@@ -19,7 +20,8 @@ class BaseNotifier(ABC):
         pass
 
     @abstractmethod
-    def send_message(self, text: str) -> bool:
+    def send_message(self, text: str, reply_markup: Optional[Dict[str, Any]] = None) -> bool:
+
         """Send a plain or markup-formatted message directly to the notification destination.
 
         Args:

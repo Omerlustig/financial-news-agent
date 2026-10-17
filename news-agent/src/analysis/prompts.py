@@ -1,6 +1,7 @@
-from typing import Tuple, List, Set
+from typing import Tuple, List, Set, Optional
 import re
 from src.models import RawArticle
+from src.analysis.taxonomy import SECTaxonomyClassifier, MayaReportCategory
 
 # Known non-ticker tokens (country codes, geopolitical entities, regulatory bodies)
 EXCLUDED_NON_TICKER_TOKENS: Set[str] = {
@@ -75,6 +76,26 @@ You execute your evaluation using 5 DETERMINISTIC CORE SKILLS:
      * `UNVERIFIED`: Material claims cannot be confirmed, lack authoritative primary attribution, or reports conflict.
      * `NO_ACTION`: Immaterial noise, routine executive comments, minor analyst target tweaks, or consensus macro data.
 
+REGULATORY DISCLOSURES & TAXONOMY (SEC EDGAR 8-K & ISRAELI TASE/MAYA):
+When evaluating official corporate filings or regulatory disclosures, calibrate severity against deterministic baseline filing items:
+1. SEC EDGAR 8-K Filings:
+   - Item 1.01 (Entry into Material Definitive Agreement / M&A / Major Strategic Partnership): Baseline Impact HIGH, Score 8. Directional Stance: Typically BULLISH or NEUTRAL.
+   - Item 1.02 (Termination of a Material Definitive Agreement): Baseline Impact HIGH, Score 8. Directional Stance: BEARISH.
+   - Item 2.02 (Results of Operations and Financial Condition / Earnings Releases): Baseline Impact HIGH or AVERAGE, Score 7.
+   - Item 4.02 (Non-Reliance on Previously Issued Financial Statements / Accounting Restatement): Baseline Impact CRITICAL, Score 9. Directional Stance: Strongly BEARISH.
+   - Item 5.02 (Departure / Election of Principal Officers, CEO, CFO, Directors): CEO/CFO departure is Impact HIGH, Score 7; routine director/officer rotation is Impact AVERAGE, Score 6.
+   - General 8-K / Other Items: Baseline Impact AVERAGE, Score 5.
+   * If the article references an SEC filing, populate 'sec_filing_item' in the output JSON with the exact SEC item classification (e.g., "Item 1.01: Entry into Material Definitive Agreement (M&A / Partnership)").
+
+2. Israeli MAYA & TASE Corporate Disclosures (דוחות מאיה והבורסה לניירות ערך בתל אביב):
+   - Immediate Report (דוח מיידי / דיווח מיידי):
+     * Profit Warning (אזהרת רווח / הרעה מהותית בתוצאות): Baseline Impact HIGH or CRITICAL, Score 8-9. Directional Stance: BEARISH.
+     * M&A / Tender Offer (מיזוג / הצעת רכש / רכישת פעילות): Baseline Impact HIGH, Score 8.
+     * Material Agreement (כניסה להסכם מהותי / התקשרות מהותית): Baseline Impact HIGH, Score 8.
+     * Capital Raise / Public Offering (גיוס הון / הנפקת מניות / הנפקת אג"ח / הקצאה פרטית): Baseline Impact AVERAGE or HIGH, Score 6-7.
+     * Shareholder Meeting / Proxy (זימון אסיפה כללית): Baseline Impact AVERAGE or LOW, Score 4-5.
+   * If an Israeli MAYA / TASE filing is identified, explicitly reference the disclosure type in 'sec_filing_item' (e.g., "MAYA: M&A / Merger", "MAYA: Profit Warning") and elaborate in 'catalyst_thesis'.
+
 BALANCED DEBATE LOGIC (FinnewsHunter Debate Framework):
 Every catalyst analysis must evaluate opposing viewpoints and risks:
 - `beneficiaries`: Specific public company tickers positively exposed (e.g. ["$NVDA", "$TSM"]).
@@ -135,6 +156,7 @@ Respond with pure JSON conforming strictly to this schema:
     "has_direct_exposure": boolean,
     "passes_all_gates": boolean
   },
+  "sec_filing_item": "Item 1.01: Entry into Material Definitive Agreement (M&A / Partnership)" | null,
   "recommendation": "Concise 1-sentence actionable analyst recommendation or monitoring posture (e.g. 'Prioritize long exposure on $NVDA/$TSM on dips; hedge downside risk via $SMH puts; avoid $INTC until next quarter').",
   "disclaimer": "⚠️ News-derived hypothesis. Market pricing, valuation, and entry points were not checked."
 }
@@ -145,6 +167,27 @@ def build_analyst_prompt(article: RawArticle) -> Tuple[str, str]:
     """Generates the institutional financial analyst system prompt and article analysis prompt."""
     article_date = article.published_at.isoformat() if article.published_at else "Not specified"
     content_snippet = f"\nFULL CONTENT / SNIPPET:\n{article.content}" if article.content else ""
+
+    regulatory_context_lines = []
+    sec_item, sec_grade, sec_score = SECTaxonomyClassifier.classify_sec_item(
+        article.title, article.summary or ""
+    )
+    if sec_item:
+        regulatory_context_lines.append(f"- Detected SEC 8-K Filing Item: {sec_item.value}")
+        regulatory_context_lines.append(f"  * Baseline Impact Grade: {sec_grade.value if sec_grade else 'HIGH'}")
+        regulatory_context_lines.append(f"  * Baseline Confidence Score: {sec_score or 8}")
+
+    maya_cat, maya_grade, maya_score = SECTaxonomyClassifier.classify_maya_report(
+        article.title, article.summary or ""
+    )
+    if maya_cat:
+        regulatory_context_lines.append(f"- Detected Israeli MAYA / TASE Corporate Disclosure: {maya_cat}")
+        regulatory_context_lines.append(f"  * Baseline Impact Grade: {maya_grade.value if maya_grade else 'HIGH'}")
+        regulatory_context_lines.append(f"  * Baseline Confidence Score: {maya_score or 7}")
+
+    regulatory_snippet = ""
+    if regulatory_context_lines:
+        regulatory_snippet = "\nREGULATORY DISCLOSURE CONTEXT:\n" + "\n".join(regulatory_context_lines) + "\n"
 
     user_prompt = f"""Analyze the following market news article with institutional Wall Street rigor:
 
@@ -157,7 +200,7 @@ ARTICLE DETAILS:
 SUMMARY:
 {article.summary or "No summary provided."}
 {content_snippet}
-
+{regulatory_snippet}
 EVALUATION INSTRUCTIONS:
 1. extract_financial_event: Extract verified facts, attributed statements, entities, and timestamps.
 2. verify_event: Check confirmation vs speculation; reject syndicated copies as independent proof.
@@ -165,8 +208,8 @@ EVALUATION INSTRUCTIONS:
 4. evaluate_alert_gates: Rigorously evaluate hard gates (novelty, verification, direct company exposure). If verification fails or exposure is indirect, status CANNOT be OPPORTUNITY_CANDIDATE.
 5. Balanced Debate: Identify beneficiaries ($TICKER), negatively exposed ($TICKER), counterarguments, and invalidation conditions.
 6. Multi-language: For Hebrew headlines/content (e.g., Globes, Calcalist, TheMarker, MAYA, TASE), accurately parse Israeli entities and normalize all JSON outputs to English.
+7. Regulatory Taxonomy: If SEC 8-K filing items or MAYA disclosure categories are present or detected above, calibrate baseline severity accordingly and explicitly set 'sec_filing_item'.
 
 Return ONLY valid JSON adhering strictly to the required MarketImpactAnalysis schema.
 """
     return SYSTEM_ANALYST_PROMPT, user_prompt
-

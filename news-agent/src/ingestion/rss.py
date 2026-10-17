@@ -17,6 +17,7 @@ except ImportError:
 
 from src.config import SourceConfig
 from src.ingestion.base import BaseFetcher
+from src.ingestion.extractor import ArticleBodyExtractor
 from src.models import RawArticle
 from src.storage.base import BaseStorage
 
@@ -124,6 +125,7 @@ class RSSFetcher(BaseFetcher):
         enable_etag_cache: bool = True,
         max_retries: int = 3,
         retry_backoff: float = 1.0,
+        extract_full_body: bool = False,
     ) -> None:
         super().__init__(source_config)
         self.user_agent = user_agent
@@ -133,6 +135,7 @@ class RSSFetcher(BaseFetcher):
         self.enable_etag_cache = enable_etag_cache
         self.max_retries = max(1, max_retries)
         self.retry_backoff = max(0.0, retry_backoff)
+        self.extract_full_body = extract_full_body
 
     def fetch(self) -> List[RawArticle]:
         """Fetch and parse articles from the configured RSS/Atom feed.
@@ -350,6 +353,15 @@ class RSSFetcher(BaseFetcher):
         elif isinstance(raw_content, str):
             content = clean_html(raw_content)
 
+        # Full-text body extraction if enabled and article URL is present
+        if self.extract_full_body and url:
+            try:
+                full_body = ArticleBodyExtractor().extract_full_text(url)
+                if full_body:
+                    content = full_body
+            except Exception as exc:
+                logger.warning("Failed to extract full body for '%s': %s", url, exc)
+
         # Extract GUID / ID
         guid: Optional[str] = None
         raw_id = entry.get("id") if isinstance(entry, dict) else getattr(entry, "id", None)
@@ -412,6 +424,7 @@ def fetch_all_sources(
     enable_etag_cache: bool = True,
     max_retries: int = 3,
     retry_backoff: float = 1.0,
+    extract_full_body: bool = False,
 ) -> List[RawArticle]:
     """Fetch articles from all enabled sources with feed-level error containment.
 
@@ -427,6 +440,7 @@ def fetch_all_sources(
         enable_etag_cache: Whether to use HTTP conditional GET headers.
         max_retries: Maximum retry attempts on network failures or transient 5xx HTTP errors.
         retry_backoff: Backoff multiplier in seconds.
+        extract_full_body: Whether to fetch full article body from article links.
 
     Returns:
         List[RawArticle]: Aggregated list of raw articles from all successfully polled sources.
@@ -453,6 +467,7 @@ def fetch_all_sources(
                 enable_etag_cache=enable_etag_cache,
                 max_retries=max_retries,
                 retry_backoff=retry_backoff,
+                extract_full_body=extract_full_body,
             )
             articles = fetcher.fetch()
             all_articles.extend(articles)
