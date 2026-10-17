@@ -297,3 +297,55 @@ def test_concurrent_access_and_thread_safety(tmp_path):
     # i % 4 == 0 happens 1/4 of the time
     assert final_stats["alerted_count"] == expected_total // 4
     storage.close()
+
+
+def test_storage_fail_fast_on_closed(tmp_path):
+    storage = SQLiteStorage(str(tmp_path / "closed.db"))
+    a = RawArticle(title="Test", url="https://n.com/1", source_name="Src", published_at=None, summary="")
+    storage.record_article(a)
+    assert storage.is_article_seen(a.content_hash) is True
+
+    storage.close()
+    assert storage._conn is None
+
+    # Any subsequent operation should fail fast
+    with pytest.raises(RuntimeError, match="Database connection is closed"):
+        storage.is_article_seen(a.content_hash)
+
+    with pytest.raises(RuntimeError, match="Database connection is closed"):
+        storage.filter_unseen([a])
+
+    with pytest.raises(RuntimeError, match="Database connection is closed"):
+        storage.record_article(a)
+
+    with pytest.raises(RuntimeError, match="Database connection is closed"):
+        storage.get_stats()
+
+
+def test_transaction_rollback_on_failure(tmp_path):
+    storage = SQLiteStorage(str(tmp_path / "rollback.db"))
+
+    a = RawArticle(title="Rollback Test", url="https://n.com/rb", source_name="Src", published_at=None, summary="")
+
+    # Create a temporary abort trigger to simulate failure during transaction execution
+    with storage._lock:
+        storage._conn.execute(
+            "CREATE TRIGGER abort_insert BEFORE INSERT ON articles BEGIN SELECT RAISE(ABORT, 'Simulated transaction error'); END;"
+        )
+
+    with pytest.raises(sqlite3.IntegrityError, match="Simulated transaction error"):
+        storage.record_article(a)
+
+    # Verify that article was NOT saved (transaction rolled back)
+    assert storage.is_article_seen(a.content_hash) is False
+    assert storage.get_stats()["total_articles"] == 0
+
+    # Drop trigger and verify normal operations succeed without hung transaction
+    with storage._lock:
+        storage._conn.execute("DROP TRIGGER abort_insert;")
+
+    storage.record_article(a)
+    assert storage.is_article_seen(a.content_hash) is True
+    assert storage.get_stats()["total_articles"] == 1
+    storage.close()
+

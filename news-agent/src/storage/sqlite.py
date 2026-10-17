@@ -37,35 +37,37 @@ class SQLiteStorage(BaseStorage):
             self._conn.execute("PRAGMA busy_timeout = 30000;")
             self._conn.execute("PRAGMA foreign_keys = ON;")
 
-            # Schema creation
-            self._conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS articles (
-                    content_hash TEXT PRIMARY KEY,
-                    url TEXT NOT NULL,
-                    title TEXT NOT NULL,
-                    source_name TEXT NOT NULL,
-                    published_at TEXT,
-                    created_at TEXT NOT NULL,
-                    is_market_moving INTEGER,
-                    confidence_score INTEGER,
-                    impact_grade TEXT,
-                    tickers TEXT,
-                    sectors TEXT,
-                    alerted INTEGER NOT NULL DEFAULT 0
-                );
-                """
-            )
-            self._conn.execute("CREATE INDEX IF NOT EXISTS idx_articles_alerted ON articles(alerted);")
-            self._conn.execute("CREATE INDEX IF NOT EXISTS idx_articles_is_market_moving ON articles(is_market_moving);")
-            self._conn.execute("CREATE INDEX IF NOT EXISTS idx_articles_created_at ON articles(created_at);")
-            self._conn.commit()
+            # Schema creation with automatic transaction management
+            with self._conn:
+                self._conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS articles (
+                        content_hash TEXT PRIMARY KEY,
+                        url TEXT NOT NULL,
+                        title TEXT NOT NULL,
+                        source_name TEXT NOT NULL,
+                        published_at TEXT,
+                        created_at TEXT NOT NULL,
+                        is_market_moving INTEGER,
+                        confidence_score INTEGER,
+                        impact_grade TEXT,
+                        tickers TEXT,
+                        sectors TEXT,
+                        alerted INTEGER NOT NULL DEFAULT 0
+                    );
+                    """
+                )
+                self._conn.execute("CREATE INDEX IF NOT EXISTS idx_articles_alerted ON articles(alerted);")
+                self._conn.execute("CREATE INDEX IF NOT EXISTS idx_articles_is_market_moving ON articles(is_market_moving);")
+                self._conn.execute("CREATE INDEX IF NOT EXISTS idx_articles_created_at ON articles(created_at);")
 
     def is_article_seen(self, content_hash: str) -> bool:
         """Check whether an article with the given content hash has already been stored."""
         if not content_hash:
             return False
         with self._lock:
+            if self._conn is None:
+                raise RuntimeError("Database connection is closed.")
             cursor = self._conn.cursor()
             cursor.execute("SELECT 1 FROM articles WHERE content_hash = ? LIMIT 1", (content_hash,))
             return cursor.fetchone() is not None
@@ -86,6 +88,8 @@ class SQLiteStorage(BaseStorage):
         seen_hashes = set()
         chunk_size = 500  # Stays well within SQLite bind variable limits
         with self._lock:
+            if self._conn is None:
+                raise RuntimeError("Database connection is closed.")
             cursor = self._conn.cursor()
             for i in range(0, len(unique_hashes), chunk_size):
                 chunk = unique_hashes[i:i + chunk_size]
@@ -152,24 +156,26 @@ class SQLiteStorage(BaseStorage):
             alerted = CASE WHEN excluded.alerted = 1 THEN 1 ELSE articles.alerted END
         """
         with self._lock:
-            self._conn.execute(
-                sql,
-                (
-                    article.content_hash,
-                    article.url,
-                    article.title,
-                    article.source_name,
-                    published_at_str,
-                    created_at_str,
-                    is_market_moving,
-                    confidence_score,
-                    impact_grade,
-                    tickers,
-                    sectors,
-                    alerted_int,
-                ),
-            )
-            self._conn.commit()
+            if self._conn is None:
+                raise RuntimeError("Database connection is closed.")
+            with self._conn:
+                self._conn.execute(
+                    sql,
+                    (
+                        article.content_hash,
+                        article.url,
+                        article.title,
+                        article.source_name,
+                        published_at_str,
+                        created_at_str,
+                        is_market_moving,
+                        confidence_score,
+                        impact_grade,
+                        tickers,
+                        sectors,
+                        alerted_int,
+                    ),
+                )
 
     def get_stats(self) -> Dict[str, int]:
         """Return aggregate storage statistics: total_articles, alerted_count, market_moving_count."""
@@ -181,6 +187,8 @@ class SQLiteStorage(BaseStorage):
         FROM articles
         """
         with self._lock:
+            if self._conn is None:
+                raise RuntimeError("Database connection is closed.")
             cursor = self._conn.cursor()
             cursor.execute(sql)
             row = cursor.fetchone()
@@ -197,10 +205,10 @@ class SQLiteStorage(BaseStorage):
             }
 
     def close(self) -> None:
-        """Close SQLite database connection cleanly."""
+        """Close SQLite database connection cleanly and reset reference for fail-fast behavior."""
         with self._lock:
-            if hasattr(self, "_conn") and self._conn:
+            if hasattr(self, "_conn") and self._conn is not None:
                 try:
                     self._conn.close()
-                except Exception:
-                    pass
+                finally:
+                    self._conn = None
