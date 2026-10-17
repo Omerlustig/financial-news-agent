@@ -2,11 +2,20 @@ import json
 import logging
 import re
 import time
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import litellm
 
-from src.models import RawArticle, MarketImpactAnalysis, ImpactGrade
+from src.models import (
+    RawArticle,
+    MarketImpactAnalysis,
+    ImpactGrade,
+    EventStatus,
+    DirectionalStance,
+    TimeHorizon,
+    CausalChain,
+    HardGates,
+)
 from src.config import LLMSettings
 from src.analysis.prompts import build_analyst_prompt, filter_valid_tickers
 
@@ -135,27 +144,82 @@ class MarketImpactAnalyzer:
         content: Union[str, Dict[str, Any]],
         article: Optional[RawArticle] = None,
     ) -> MarketImpactAnalysis:
-        """Cleans, parses, validates JSON, and sanitizes tradeable tickers."""
+        """Cleans, parses, validates JSON, and sanitizes tradeable tickers and hard gates."""
         if isinstance(content, dict):
             data = dict(content)
         else:
             cleaned_str = clean_json_markdown(str(content))
             data = json.loads(cleaned_str)
 
-        # Sanitize tickers
+        # Sanitize tickers in affected_tickers
         raw_tickers = data.get("affected_tickers", [])
         data["affected_tickers"] = filter_valid_tickers(raw_tickers)
+
+        # Sanitize tickers in causal_chain if present
+        if isinstance(data.get("causal_chain"), dict):
+            chain = data["causal_chain"]
+            if "beneficiaries" in chain:
+                chain["beneficiaries"] = filter_valid_tickers(chain["beneficiaries"])
+            if "negatively_exposed" in chain:
+                chain["negatively_exposed"] = filter_valid_tickers(chain["negatively_exposed"])
+
+            # If affected_tickers is empty, aggregate valid tickers from causal_chain
+            if not data["affected_tickers"]:
+                combined: List[str] = []
+                for t in chain.get("beneficiaries", []) + chain.get("negatively_exposed", []):
+                    if t not in combined:
+                        combined.append(t)
+                if combined:
+                    data["affected_tickers"] = filter_valid_tickers(combined)
+
+        # Validate and enforce hard gates if present
+        if isinstance(data.get("hard_gates"), dict):
+            hg = data["hard_gates"]
+            novel = bool(hg.get("is_novel", False))
+            verified = bool(hg.get("is_verified", False))
+            direct = bool(hg.get("has_direct_exposure", False))
+            passes_all = novel and verified and direct
+            hg["passes_all_gates"] = passes_all
+
+            # Hard-gate rule: Failed verification or weak indirect exposure blocks OPPORTUNITY_CANDIDATE.
+            # Scores cannot override failed hard gates.
+            current_status = str(data.get("status", "")).strip().upper()
+            if not passes_all and (not current_status or current_status == EventStatus.OPPORTUNITY_CANDIDATE.value):
+                if not verified:
+                    data["status"] = EventStatus.UNVERIFIED.value
+                else:
+                    data["status"] = EventStatus.WATCHLIST.value
 
         return MarketImpactAnalysis.model_validate(data)
 
     def _build_fallback(self, article: RawArticle, reason: str) -> MarketImpactAnalysis:
-        """Produces a conservative, structured non-market-moving fallback analysis."""
+        """Produces a conservative, structured non-market-moving fallback analysis with compliant CausalChain and HardGates."""
+        title_snippet = article.title[:200] if article.title else "Unknown headline"
         return MarketImpactAnalysis(
             is_market_moving=False,
             confidence_score=1,
             impact_grade=ImpactGrade.LOW,
             affected_tickers=[],
             affected_sectors=[],
-            summary=article.title[:200],
+            summary=title_snippet,
             catalyst_thesis=f"Automated analysis fallback due to: {reason}",
+            status=EventStatus.NO_ACTION,
+            directional_stance=DirectionalStance.NEUTRAL,
+            time_horizon=TimeHorizon.INTRADAY.value,
+            causal_chain=CausalChain(
+                event_facts=title_snippet,
+                economic_mechanism=f"Fallback unparsed content; no economic transmission mechanism ({reason})",
+                affected_sectors=[],
+                beneficiaries=[],
+                negatively_exposed=[],
+                counterarguments="Insufficient verified information to build causal thesis.",
+                invalidation_conditions="Publication of verified official disclosures.",
+            ),
+            hard_gates=HardGates(
+                is_novel=False,
+                is_verified=False,
+                has_direct_exposure=False,
+                passes_all_gates=False,
+            ),
+            disclaimer="⚠️ News-derived hypothesis. Market pricing, valuation, and entry points were not checked.",
         )

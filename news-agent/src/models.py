@@ -163,12 +163,21 @@ class HardGates(BaseModel):
     @classmethod
     def compute_passes_all_gates(cls, data: Any) -> Any:
         if isinstance(data, dict):
+            novel = bool(data.get("is_novel", False))
+            verified = bool(data.get("is_verified", False))
+            direct = bool(data.get("has_direct_exposure", False))
+            all_passed = novel and verified and direct
             if "passes_all_gates" not in data or data.get("passes_all_gates") is None:
-                novel = bool(data.get("is_novel", False))
-                verified = bool(data.get("is_verified", False))
-                direct = bool(data.get("has_direct_exposure", False))
-                data["passes_all_gates"] = novel and verified and direct
+                data["passes_all_gates"] = all_passed
+            else:
+                data["passes_all_gates"] = bool(data["passes_all_gates"]) and all_passed
         return data
+
+    @model_validator(mode="after")
+    def validate_passes_all_gates(self) -> "HardGates":
+        if not (self.is_novel and self.is_verified and self.has_direct_exposure):
+            self.passes_all_gates = False
+        return self
 
 
 class MarketImpactAnalysis(BaseModel):
@@ -292,3 +301,15 @@ class MarketImpactAnalysis(BaseModel):
             if cleaned:
                 normalized.append(cleaned)
         return normalized
+
+    @model_validator(mode="after")
+    def enforce_hard_gates_rule(self) -> "MarketImpactAnalysis":
+        """Ensures that failed verification or indirect exposure blocks OPPORTUNITY_CANDIDATE."""
+        if self.hard_gates is not None and not self.hard_gates.passes_all_gates:
+            if self.status == EventStatus.OPPORTUNITY_CANDIDATE:
+                if not self.hard_gates.is_verified:
+                    self.status = EventStatus.UNVERIFIED
+                else:
+                    self.status = EventStatus.WATCHLIST
+        return self
+
