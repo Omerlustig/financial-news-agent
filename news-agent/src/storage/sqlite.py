@@ -28,7 +28,7 @@ class SQLiteStorage(BaseStorage):
         self._init_db()
 
     def _init_db(self) -> None:
-        """Initialize database schema, WAL mode, and indexes."""
+        """Initialize database schema, WAL mode, indexes, and migration safety checks."""
         with self._lock:
             # Enable WAL mode and pragmas for production robustness
             if self.db_path != ":memory:":
@@ -53,13 +53,39 @@ class SQLiteStorage(BaseStorage):
                         impact_grade TEXT,
                         tickers TEXT,
                         sectors TEXT,
-                        alerted INTEGER NOT NULL DEFAULT 0
+                        alerted INTEGER NOT NULL DEFAULT 0,
+                        status TEXT,
+                        directional_stance TEXT,
+                        causal_mechanism TEXT,
+                        beneficiaries TEXT,
+                        negatively_exposed TEXT,
+                        counterarguments TEXT,
+                        invalidation_conditions TEXT,
+                        passes_hard_gates INTEGER
                     );
                     """
                 )
+                # Migration safety check: ensure all newly specified columns exist in existing databases
+                cursor = self._conn.execute("PRAGMA table_info(articles);")
+                existing_cols = {row["name"] if isinstance(row, sqlite3.Row) else row[1] for row in cursor.fetchall()}
+                new_columns = [
+                    ("status", "TEXT"),
+                    ("directional_stance", "TEXT"),
+                    ("causal_mechanism", "TEXT"),
+                    ("beneficiaries", "TEXT"),
+                    ("negatively_exposed", "TEXT"),
+                    ("counterarguments", "TEXT"),
+                    ("invalidation_conditions", "TEXT"),
+                    ("passes_hard_gates", "INTEGER"),
+                ]
+                for col_name, col_type in new_columns:
+                    if col_name not in existing_cols:
+                        self._conn.execute(f"ALTER TABLE articles ADD COLUMN {col_name} {col_type};")
+
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_articles_alerted ON articles(alerted);")
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_articles_is_market_moving ON articles(is_market_moving);")
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_articles_created_at ON articles(created_at);")
+                self._conn.execute("CREATE INDEX IF NOT EXISTS idx_articles_status ON articles(status);")
 
     def is_article_seen(self, content_hash: str) -> bool:
         """Check whether an article with the given content hash has already been stored."""
@@ -128,6 +154,45 @@ class SQLiteStorage(BaseStorage):
         sectors = json.dumps(analysis.affected_sectors) if analysis and analysis.affected_sectors is not None else None
         alerted_int = 1 if alerted else 0
 
+        status = (
+            analysis.status.value
+            if analysis and hasattr(analysis.status, "value")
+            else str(analysis.status)
+            if analysis and analysis.status is not None
+            else None
+        )
+        directional_stance = (
+            analysis.directional_stance.value
+            if analysis and hasattr(analysis.directional_stance, "value")
+            else str(analysis.directional_stance)
+            if analysis and analysis.directional_stance is not None
+            else None
+        )
+
+        causal_mechanism = None
+        beneficiaries = None
+        negatively_exposed = None
+        counterarguments = None
+        invalidation_conditions = None
+        if analysis and analysis.causal_chain is not None:
+            causal_mechanism = analysis.causal_chain.economic_mechanism
+            beneficiaries = (
+                json.dumps(analysis.causal_chain.beneficiaries)
+                if analysis.causal_chain.beneficiaries is not None
+                else None
+            )
+            negatively_exposed = (
+                json.dumps(analysis.causal_chain.negatively_exposed)
+                if analysis.causal_chain.negatively_exposed is not None
+                else None
+            )
+            counterarguments = analysis.causal_chain.counterarguments
+            invalidation_conditions = analysis.causal_chain.invalidation_conditions
+
+        passes_hard_gates = None
+        if analysis and analysis.hard_gates is not None:
+            passes_hard_gates = 1 if analysis.hard_gates.passes_all_gates else 0
+
         sql = """
         INSERT INTO articles (
             content_hash,
@@ -141,8 +206,16 @@ class SQLiteStorage(BaseStorage):
             impact_grade,
             tickers,
             sectors,
-            alerted
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            alerted,
+            status,
+            directional_stance,
+            causal_mechanism,
+            beneficiaries,
+            negatively_exposed,
+            counterarguments,
+            invalidation_conditions,
+            passes_hard_gates
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(content_hash) DO UPDATE SET
             url = excluded.url,
             title = excluded.title,
@@ -153,7 +226,15 @@ class SQLiteStorage(BaseStorage):
             impact_grade = COALESCE(excluded.impact_grade, articles.impact_grade),
             tickers = COALESCE(excluded.tickers, articles.tickers),
             sectors = COALESCE(excluded.sectors, articles.sectors),
-            alerted = CASE WHEN excluded.alerted = 1 THEN 1 ELSE articles.alerted END
+            alerted = CASE WHEN excluded.alerted = 1 THEN 1 ELSE articles.alerted END,
+            status = COALESCE(excluded.status, articles.status),
+            directional_stance = COALESCE(excluded.directional_stance, articles.directional_stance),
+            causal_mechanism = COALESCE(excluded.causal_mechanism, articles.causal_mechanism),
+            beneficiaries = COALESCE(excluded.beneficiaries, articles.beneficiaries),
+            negatively_exposed = COALESCE(excluded.negatively_exposed, articles.negatively_exposed),
+            counterarguments = COALESCE(excluded.counterarguments, articles.counterarguments),
+            invalidation_conditions = COALESCE(excluded.invalidation_conditions, articles.invalidation_conditions),
+            passes_hard_gates = COALESCE(excluded.passes_hard_gates, articles.passes_hard_gates)
         """
         with self._lock:
             if self._conn is None:
@@ -174,6 +255,14 @@ class SQLiteStorage(BaseStorage):
                         tickers,
                         sectors,
                         alerted_int,
+                        status,
+                        directional_stance,
+                        causal_mechanism,
+                        beneficiaries,
+                        negatively_exposed,
+                        counterarguments,
+                        invalidation_conditions,
+                        passes_hard_gates,
                     ),
                 )
 

@@ -1,4 +1,5 @@
 sources:
+  # US Core International Financial News
   - name: "Reuters Business"
     type: "rss"
     url: "https://feeds.feedburner.com/reuters/businessNews"
@@ -14,12 +15,59 @@ sources:
     url: "https://finance.yahoo.com/news/rssindex"
     enabled: true
 
-  - name: "MarketWatch Top Stories"
+  - name: "Financial Times"
     type: "rss"
-    url: "https://feeds.content.dowjones.io/public/rss/mw_topstories"
+    url: "https://www.ft.com/rss/home/us"
     enabled: true
 
-  - name: "SEC Press Releases"
+  - name: "Bloomberg Markets"
+    type: "rss"
+    url: "https://feeds.bloomberg.com/markets/news.rss"
+    enabled: true
+
+  # US Primary & Specialist Sources
+  - name: "SEC EDGAR Filings"
     type: "rss"
     url: "https://www.sec.gov/news/pressreleases.rss"
+    enabled: true
+
+  - name: "Federal Reserve Speeches"
+    type: "rss"
+    url: "https://www.federalreserve.gov/feeds/speeches.xml"
+    enabled: true
+
+  - name: "EIA Energy & Petroleum"
+    type: "rss"
+    url: "https://www.eia.gov/petroleum/supply/weekly/rss.xml"
+    enabled: true
+
+  # Israel Core Sources
+  - name: "Globes English"
+    type: "rss"
+    url: "https://en.globes.co.il/block/1010"
+    enabled: true
+
+  - name: "Globes Hebrew"
+    type: "rss"
+    url: "https://www.globes.co.il/webservice/rss/rssfeeder.asmx/FeederNode?iID=1225"
+    enabled: true
+
+  - name: "Calcalist"
+    type: "rss"
+    url: "https://www.calcalist.co.il/GeneralRSS/0,16335,L-8,00.xml"
+    enabled: true
+
+  - name: "TheMarker"
+    type: "rss"
+    url: "https://www.themarker.com/srv/rss"
+    enabled: true
+
+  - name: "TASE Market Announcements"
+    type: "rss"
+    url: "https://www.tase.co.il/en/rss/market-announcements"
+    enabled: true
+
+  - name: "MAYA Corporate Disclosures"
+    type: "rss"
+    url: "https://maya.tase.co.il/rss/corporate-reports"
     enabled: true

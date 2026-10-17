@@ -6,7 +6,15 @@ import pytest
 
 from src.storage.base import BaseStorage
 from src.storage.sqlite import SQLiteStorage
-from src.models import RawArticle, MarketImpactAnalysis, ImpactGrade
+from src.models import (
+    RawArticle,
+    MarketImpactAnalysis,
+    ImpactGrade,
+    EventStatus,
+    DirectionalStance,
+    CausalChain,
+    HardGates,
+)
 
 
 def test_base_storage_cannot_be_instantiated_directly():
@@ -152,6 +160,10 @@ def test_record_article_upsert_and_data_integrity(tmp_path):
     assert updated_row["alerted"] == 1
     assert json.loads(updated_row["tickers"]) == ["$NVDA", "$TSM"]
     assert json.loads(updated_row["sectors"]) == ["Semiconductors", "Artificial Intelligence"]
+    assert updated_row["status"] == "OPPORTUNITY_CANDIDATE"
+    assert updated_row["directional_stance"] == "NEUTRAL"
+    assert updated_row["causal_mechanism"] is None
+    assert updated_row["passes_hard_gates"] is None
     conn.close()
 
     # 3. Upsert again with alerted=False should NOT clear alerted status if already alerted
@@ -348,4 +360,166 @@ def test_transaction_rollback_on_failure(tmp_path):
     assert storage.is_article_seen(a.content_hash) is True
     assert storage.get_stats()["total_articles"] == 1
     storage.close()
+
+
+def test_record_article_persists_institutional_fields(tmp_path):
+    storage = SQLiteStorage(str(tmp_path / "institutional.db"))
+    article = RawArticle(
+        title="Semiconductor export license approvals",
+        url="https://example.com/semi",
+        source_name="Reuters",
+    )
+    chain = CausalChain(
+        event_facts="Commerce Department grants special export waivers.",
+        economic_mechanism="Direct revenue resumption for enterprise AI chips.",
+        affected_sectors=["Semiconductors"],
+        beneficiaries=["$NVDA", "$AMD"],
+        negatively_exposed=["$INTC"],
+        counterarguments="Licenses subject to 90-day revocable review.",
+        invalidation_conditions="Commerce Department retracts waiver on national security grounds.",
+    )
+    gates = HardGates(
+        is_novel=True,
+        is_verified=True,
+        has_direct_exposure=True,
+        passes_all_gates=True,
+    )
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=9,
+        impact_grade=ImpactGrade.CRITICAL,
+        affected_tickers=["$NVDA", "$AMD"],
+        affected_sectors=["Semiconductors"],
+        summary="Export waivers approved for top GPU makers.",
+        catalyst_thesis="Unlocks immediate shipment backlog.",
+        status=EventStatus.OPPORTUNITY_CANDIDATE,
+        directional_stance=DirectionalStance.BULLISH,
+        causal_chain=chain,
+        hard_gates=gates,
+    )
+    storage.record_article(article, analysis, alerted=True)
+
+    conn = sqlite3.connect(storage.db_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT * FROM articles WHERE content_hash = ?", (article.content_hash,)).fetchone()
+    assert row is not None
+    assert row["status"] == "OPPORTUNITY_CANDIDATE"
+    assert row["directional_stance"] == "BULLISH"
+    assert row["causal_mechanism"] == "Direct revenue resumption for enterprise AI chips."
+    assert json.loads(row["beneficiaries"]) == ["$NVDA", "$AMD"]
+    assert json.loads(row["negatively_exposed"]) == ["$INTC"]
+    assert row["counterarguments"] == "Licenses subject to 90-day revocable review."
+    assert row["invalidation_conditions"] == "Commerce Department retracts waiver on national security grounds."
+    assert row["passes_hard_gates"] == 1
+    conn.close()
+    storage.close()
+
+
+def test_storage_schema_migration_safety(tmp_path):
+    db_file = tmp_path / "legacy_migration.db"
+
+    # 1. Create a legacy table without the new columns
+    conn = sqlite3.connect(str(db_file))
+    conn.execute(
+        """
+        CREATE TABLE articles (
+            content_hash TEXT PRIMARY KEY,
+            url TEXT NOT NULL,
+            title TEXT NOT NULL,
+            source_name TEXT NOT NULL,
+            published_at TEXT,
+            created_at TEXT NOT NULL,
+            is_market_moving INTEGER,
+            confidence_score INTEGER,
+            impact_grade TEXT,
+            tickers TEXT,
+            sectors TEXT,
+            alerted INTEGER NOT NULL DEFAULT 0
+        );
+        """
+    )
+    # Insert a legacy article
+    conn.execute(
+        """
+        INSERT INTO articles (
+            content_hash, url, title, source_name, published_at, created_at,
+            is_market_moving, confidence_score, impact_grade, tickers, sectors, alerted
+        ) VALUES ('legacy_hash', 'https://example.com/legacy', 'Legacy News', 'OldSource', NULL, '2026-01-01', 1, 7, 'HIGH', '["$AAPL"]', '["Tech"]', 0);
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    # 2. Open with SQLiteStorage, triggering _init_db and migrations
+    storage = SQLiteStorage(str(db_file))
+
+    # Verify legacy article is intact
+    assert storage.is_article_seen("legacy_hash") is True
+
+    # 3. Verify all 8 columns were added via ALTER TABLE
+    conn = sqlite3.connect(str(db_file))
+    conn.row_factory = sqlite3.Row
+    cursor = conn.execute("PRAGMA table_info(articles);")
+    col_names = {row["name"] for row in cursor.fetchall()}
+    for expected_col in [
+        "status",
+        "directional_stance",
+        "causal_mechanism",
+        "beneficiaries",
+        "negatively_exposed",
+        "counterarguments",
+        "invalidation_conditions",
+        "passes_hard_gates",
+    ]:
+        assert expected_col in col_names
+
+    # 4. Insert new article with institutional fields into migrated database
+    new_art = RawArticle(
+        title="Migrated New Article",
+        url="https://example.com/migrated",
+        source_name="NewSource",
+    )
+    chain = CausalChain(
+        event_facts="Facts",
+        economic_mechanism="Mechanism",
+        affected_sectors=["Energy"],
+        beneficiaries=["$XOM"],
+        negatively_exposed=["$NEE"],
+        counterarguments="Risk factors",
+        invalidation_conditions="Policy reversal",
+    )
+    gates = HardGates(
+        is_novel=True,
+        is_verified=True,
+        has_direct_exposure=True,
+        passes_all_gates=True,
+    )
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=9,
+        impact_grade=ImpactGrade.CRITICAL,
+        affected_tickers=["$XOM"],
+        affected_sectors=["Energy"],
+        summary="Summary",
+        catalyst_thesis="Thesis",
+        status=EventStatus.OPPORTUNITY_CANDIDATE,
+        directional_stance=DirectionalStance.BULLISH,
+        causal_chain=chain,
+        hard_gates=gates,
+    )
+    storage.record_article(new_art, analysis, alerted=True)
+
+    row = conn.execute("SELECT * FROM articles WHERE content_hash = ?", (new_art.content_hash,)).fetchone()
+    assert row["status"] == "OPPORTUNITY_CANDIDATE"
+    assert row["directional_stance"] == "BULLISH"
+    assert row["causal_mechanism"] == "Mechanism"
+    assert json.loads(row["beneficiaries"]) == ["$XOM"]
+    assert json.loads(row["negatively_exposed"]) == ["$NEE"]
+    assert row["counterarguments"] == "Risk factors"
+    assert row["invalidation_conditions"] == "Policy reversal"
+    assert row["passes_hard_gates"] == 1
+
+    conn.close()
+    storage.close()
+
 
