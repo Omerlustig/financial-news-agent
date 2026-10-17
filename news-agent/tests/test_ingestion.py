@@ -516,4 +516,67 @@ def test_raw_article_canonicalize_url_and_dedup():
     assert article1.content_hash == article2.content_hash
 
 
+def test_rss_fetcher_per_source_max_items_override():
+    """Verify that SourceConfig.max_items takes precedence over fetcher max_items."""
+    src = SourceConfig(name="Custom Source", type="rss", url="https://example.com/rss", max_items=2)
+    with patch("feedparser.parse") as mock_parse:
+        mock_parse.return_value = {
+            "entries": [
+                {"title": f"Story {i}", "link": f"https://example.com/{i}", "published": "Sat, 17 Oct 2026 12:00:00 GMT"}
+                for i in range(10)
+            ],
+            "bozo": 0,
+        }
+        # Global max_items is 8, but source has max_items=2
+        fetcher = RSSFetcher(src, max_items=8)
+        articles = fetcher.fetch()
+        assert len(articles) == 2
+
+
+def test_rss_fetcher_recency_filter_at_fetch_time():
+    """Verify that RSSFetcher discards articles older than max_article_age_minutes."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    fresh_pub = (now - datetime.timedelta(minutes=5)).strftime("%a, %d %b %Y %H:%M:%S GMT")
+    stale_pub = (now - datetime.timedelta(minutes=45)).strftime("%a, %d %b %Y %H:%M:%S GMT")
+
+    src = SourceConfig(name="Breaking Feed", type="rss", url="https://example.com/rss")
+    with patch("feedparser.parse") as mock_parse:
+        mock_parse.return_value = {
+            "entries": [
+                {"title": "Fresh Breaking News", "link": "https://example.com/fresh", "published": fresh_pub},
+                {"title": "Stale 45min Old News", "link": "https://example.com/stale", "published": stale_pub},
+            ],
+            "bozo": 0,
+        }
+        # Limit to 15 minutes
+        fetcher = RSSFetcher(src, max_article_age_minutes=15)
+        articles = fetcher.fetch()
+
+        assert len(articles) == 1
+        assert articles[0].title == "Fresh Breaking News"
+
+
+def test_rss_fetcher_per_source_recency_override():
+    """Verify that SourceConfig.max_article_age_minutes overrides global max_article_age_minutes."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    twenty_min_pub = (now - datetime.timedelta(minutes=20)).strftime("%a, %d %b %Y %H:%M:%S GMT")
+
+    # Source allows 30 minutes, whereas global is 15 minutes
+    src = SourceConfig(name="Custom Age Feed", type="rss", url="https://example.com/rss", max_article_age_minutes=30)
+    with patch("feedparser.parse") as mock_parse:
+        mock_parse.return_value = {
+            "entries": [
+                {"title": "20min Article", "link": "https://example.com/20m", "published": twenty_min_pub},
+            ],
+            "bozo": 0,
+        }
+        fetcher = RSSFetcher(src, max_article_age_minutes=15)
+        articles = fetcher.fetch()
+
+        # Should be kept because per-source limit is 30 minutes
+        assert len(articles) == 1
+        assert articles[0].title == "20min Article"
+
+
+
 

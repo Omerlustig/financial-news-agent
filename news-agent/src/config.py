@@ -19,6 +19,8 @@ class SourceConfig(BaseModel):
     type: str = Field(default="rss", description="Source type ('rss' or 'scraper').")
     url: str = Field(..., description="RSS/Atom feed URL or scraping endpoint.")
     enabled: bool = Field(default=True, description="Whether this feed is actively polled.")
+    max_items: Optional[int] = Field(default=None, description="Per-source maximum articles fetched per cycle (overrides global batch_size_per_source).")
+    max_article_age_minutes: Optional[int] = Field(default=None, description="Per-source maximum article age in minutes (overrides global max_article_age_minutes).")
 
 
 class SourcesContainer(BaseModel):

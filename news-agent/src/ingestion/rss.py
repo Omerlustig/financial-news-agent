@@ -124,6 +124,7 @@ class RSSFetcher(BaseFetcher):
         source_config: SourceConfig,
         timeout: float = DEFAULT_TIMEOUT_SECONDS,
         max_items: Optional[int] = None,
+        max_article_age_minutes: Optional[int] = None,
         user_agent: str = USER_AGENT,
         storage: Optional[BaseStorage] = None,
         enable_etag_cache: bool = True,
@@ -134,7 +135,23 @@ class RSSFetcher(BaseFetcher):
         super().__init__(source_config)
         self.user_agent = user_agent
         self.timeout = timeout
-        self.max_items = max_items
+
+        # Resolve effective max_items: source-specific override takes precedence over global
+        effective_max_items = (
+            getattr(source_config, "max_items", None)
+            if getattr(source_config, "max_items", None) is not None
+            else max_items
+        )
+        self.max_items = effective_max_items
+
+        # Resolve effective max_article_age_minutes: source-specific override takes precedence over global
+        effective_max_age = (
+            getattr(source_config, "max_article_age_minutes", None)
+            if getattr(source_config, "max_article_age_minutes", None) is not None
+            else max_article_age_minutes
+        )
+        self.max_article_age_minutes = effective_max_age
+
         self.storage = storage
         self.enable_etag_cache = enable_etag_cache
         self.max_retries = max(1, max_retries)
@@ -309,10 +326,39 @@ class RSSFetcher(BaseFetcher):
             entries = entries[: self.max_items]
 
         articles: List[RawArticle] = []
+        now_utc = datetime.now(timezone.utc)
         for entry in entries:
             try:
                 article = self._parse_entry(entry)
                 if article is not None:
+                    # Enforce recency filter at fetch time if configured
+                    if (
+                        self.max_article_age_minutes is not None
+                        and self.max_article_age_minutes > 0
+                        and article.published_at is not None
+                    ):
+                        pub = (
+                            article.published_at
+                            if article.published_at.tzinfo is not None
+                            else article.published_at.replace(tzinfo=timezone.utc)
+                        )
+                        age_min = (now_utc - pub).total_seconds() / 60.0
+                        if age_min > self.max_article_age_minutes:
+                            # Record stale article in storage if present so future cycles skip it immediately
+                            if self.storage is not None:
+                                try:
+                                    if not self.storage.is_article_seen(article.content_hash):
+                                        self.storage.record_article(article, alerted=False)
+                                except Exception:
+                                    pass
+                            logger.debug(
+                                "Skipping stale article '%s' (age %.1f min > %d min limit)",
+                                article.title,
+                                age_min,
+                                self.max_article_age_minutes,
+                            )
+                            continue
+
                     articles.append(article)
             except Exception as exc:
                 logger.debug(
@@ -444,6 +490,7 @@ def fetch_all_sources(
     sources: List[SourceConfig],
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     max_items_per_source: Optional[int] = None,
+    max_article_age_minutes: Optional[int] = None,
     storage: Optional[BaseStorage] = None,
     enable_etag_cache: bool = True,
     max_retries: int = 3,
@@ -460,6 +507,7 @@ def fetch_all_sources(
         sources: List of SourceConfig instances to poll.
         timeout: Socket timeout in seconds for feed requests.
         max_items_per_source: Optional maximum number of recent articles to ingest per feed.
+        max_article_age_minutes: Optional maximum age of articles in minutes to ingest.
         storage: Optional BaseStorage instance for conditional ETag and Last-Modified caching.
         enable_etag_cache: Whether to use HTTP conditional GET headers.
         max_retries: Maximum retry attempts on network failures or transient 5xx HTTP errors.
@@ -487,6 +535,7 @@ def fetch_all_sources(
                 source,
                 timeout=timeout,
                 max_items=max_items_per_source,
+                max_article_age_minutes=max_article_age_minutes,
                 storage=storage,
                 enable_etag_cache=enable_etag_cache,
                 max_retries=max_retries,

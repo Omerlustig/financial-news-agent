@@ -1,7 +1,7 @@
 agent:
   polling_interval_minutes: 15
-  batch_size_per_source: 15
-  max_article_age_minutes: 15 # Only process fresh breaking news from the past 15 minutes (or set null/0 to disable)
+  batch_size_per_source: 15 # Maximum articles fetched per feed/site per cycle
+  max_article_age_minutes: 15 # Maximum age of articles in minutes (e.g. 15 = only fetch/process news from the past 15 min; set null/0 to disable)
   database_path: "data/agent.db"
   enable_etag_cache: true # Enable HTTP conditional GET (ETag/Last-Modified) feed caching
   fetch_max_retries: 3 # Retry count on feed network/connection drop or HTTP 5xx

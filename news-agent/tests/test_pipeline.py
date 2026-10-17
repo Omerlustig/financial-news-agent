@@ -980,6 +980,59 @@ def test_render_actionable_investment_bottom_line():
     assert "Thesis Invalidation Condition" in output
 
 
+def test_cli_limit_per_source_and_max_age_options(tmp_path):
+    """Verify that CLI run-once accepts --limit-per-source and --max-age-minutes."""
+    from typer.testing import CliRunner
+    from src.cli import app
+
+    runner = CliRunner()
+    db_file = tmp_path / "cli_test.db"
+    settings_file = tmp_path / "settings.yaml"
+    settings_file.write_text(f"""
+agent:
+  polling_interval_minutes: 15
+  batch_size_per_source: 10
+  max_article_age_minutes: 30
+  database_path: "{db_file}"
+filter:
+  min_confidence_score: 8
+  min_impact_grade: "CRITICAL"
+  alert_on_all: false
+llm:
+  model: "gemini/gemini-3.8-flash"
+telegram:
+  bot_token: null
+  chat_id: null
+""")
+
+    sources_file = tmp_path / "sources.yaml"
+    sources_file.write_text("""
+sources:
+  - name: "TestSource"
+    type: "rss"
+    url: "https://example.com/feed"
+    enabled: true
+""")
+
+    with patch("src.pipeline.fetch_all_sources", return_value=[]) as mock_fetch:
+        result = runner.invoke(
+            app,
+            [
+                "run-once",
+                "-c", str(settings_file),
+                "-s", str(sources_file),
+                "--limit-per-source", "3",
+                "--max-age-minutes", "10",
+            ],
+        )
+        assert result.exit_code == 0
+        assert mock_fetch.called
+        kwargs = mock_fetch.call_args.kwargs
+        assert kwargs["max_items_per_source"] == 3
+        assert kwargs["max_article_age_minutes"] == 10
+
+
+
 
 
 

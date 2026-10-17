@@ -1,5 +1,8 @@
 sources:
   # US Core International Financial News
+  # Note: Each source can optionally override global limits with:
+  #   max_items: 10              # Max articles to fetch for this specific site
+  #   max_article_age_minutes: 15 # Max article age in minutes for this specific site
   - name: "Reuters Business"
     type: "rss"
     url: "https://feeds.feedburner.com/reuters/businessNews"

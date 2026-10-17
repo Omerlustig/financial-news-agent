@@ -11,6 +11,10 @@ litellm.telemetry = False
 litellm.set_verbose = False
 litellm.drop_params = True
 
+# Silence verbose LiteLLM logger outputs
+logging.getLogger("LiteLLM").setLevel(logging.WARNING)
+logging.getLogger("litellm").setLevel(logging.WARNING)
+
 from src.models import (
     RawArticle,
     MarketImpactAnalysis,
@@ -216,17 +220,6 @@ class MarketImpactAnalyzer:
                         or "unauthorized" in str(e).lower()
                     )
 
-                    # Immediate failover upon 429 rate limit, 503 high demand spike, or missing/invalid API key
-                    if has_fallback_remaining and (is_rate_limit or is_high_demand):
-                        next_model = candidate_models[model_idx + 1]
-                        logger.warning(
-                            "Model '%s' encountered %s; failing over immediately to fallback model '%s'",
-                            target_model,
-                            "high demand (503)" if is_high_demand else "rate limit (429)",
-                            next_model,
-                        )
-                        break
-
                     is_quota_error = (
                         "quota" in str(e).lower()
                         or "resource_exhausted" in str(e).lower()
@@ -238,7 +231,18 @@ class MarketImpactAnalyzer:
                             "Daily API quota reached for model '%s'. Seamlessly using high-precision financial rules engine for catalyst scoring.",
                             target_model,
                         )
-                        return self._build_fallback(article, f"Quota reached for {target_model}")
+                        return self._build_fallback(article, f"Daily quota reached for {target_model}")
+
+                    # Immediate failover upon 429 rate limit, 503 high demand spike, or missing/invalid API key
+                    if has_fallback_remaining and (is_rate_limit or is_high_demand):
+                        next_model = candidate_models[model_idx + 1]
+                        logger.warning(
+                            "Model '%s' encountered %s; failing over immediately to fallback model '%s'",
+                            target_model,
+                            "high demand (503)" if is_high_demand else "rate limit (429)",
+                            next_model,
+                        )
+                        break
 
                     if is_auth_error:
                         if has_fallback_remaining:
@@ -248,7 +252,13 @@ class MarketImpactAnalyzer:
                                 target_model,
                                 next_model,
                             )
-                        break
+                            break
+                        else:
+                            logger.info(
+                                "Model '%s' credentials unavailable. Using deterministic financial engine for catalyst analysis.",
+                                target_model,
+                            )
+                            return self._build_fallback(article, f"Credentials unavailable for {target_model}")
 
                     logger.warning(
                         "LLM analysis attempt %d/%d on model '%s' failed (%s): %s",

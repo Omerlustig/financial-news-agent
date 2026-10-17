@@ -82,6 +82,7 @@ class Pipeline:
         alert_on_all: Optional[bool] = None,
         settings: Optional[Settings] = None,
         fetch_timeout: float = 15.0,
+        batch_size_per_source: Optional[int] = None,
         max_article_age_minutes: Optional[int] = None,
     ) -> None:
         self.settings = settings
@@ -90,6 +91,14 @@ class Pipeline:
         self.corroborator = corroborator if corroborator is not None else EventCorroborator()
         self.surge_engine = surge_engine if surge_engine is not None else SurgeVelocityEngine()
         self.trend_engine = trend_engine if trend_engine is not None else TrendEngine()
+
+        # Batch size per source resolution (default to settings or 15)
+        if batch_size_per_source is not None:
+            self.batch_size_per_source = batch_size_per_source
+        elif settings is not None and getattr(settings, "agent", None) is not None:
+            self.batch_size_per_source = getattr(settings.agent, "batch_size_per_source", 15)
+        else:
+            self.batch_size_per_source = 15
 
         # Recency filter resolution (default to 15 minutes unless overridden or disabled)
         if max_article_age_minutes is not None:
@@ -449,20 +458,24 @@ class Pipeline:
         """Execute a complete scan cycle across all configured sources."""
         logger.info("Starting pipeline scan cycle across sources...")
         fetch_error = False
-        batch_size = (
-            self.settings.agent.batch_size_per_source
-            if self.settings is not None and getattr(self.settings, "agent", None) is not None
-            else None
-        )
+        batch_size = self.batch_size_per_source
+        max_age = self.max_article_age_minutes
         try:
             if self.fetcher is not None:
                 try:
-                    articles = self.fetcher(self.sources, max_items_per_source=batch_size)
+                    articles = self.fetcher(
+                        self.sources,
+                        max_items_per_source=batch_size,
+                        max_article_age_minutes=max_age,
+                    )
                 except TypeError:
                     try:
-                        articles = self.fetcher(self.sources)
+                        articles = self.fetcher(self.sources, max_items_per_source=batch_size)
                     except TypeError:
-                        articles = self.fetcher()
+                        try:
+                            articles = self.fetcher(self.sources)
+                        except TypeError:
+                            articles = self.fetcher()
             else:
                 enable_etag = (
                     self.settings.agent.enable_etag_cache
@@ -483,6 +496,7 @@ class Pipeline:
                     self.sources,
                     timeout=self.fetch_timeout,
                     max_items_per_source=batch_size,
+                    max_article_age_minutes=max_age,
                     storage=self.storage,
                     enable_etag_cache=enable_etag,
                     max_retries=max_retries,

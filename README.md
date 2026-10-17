@@ -146,40 +146,41 @@ sources:
     type: "rss"
     url: "https://feeds.feedburner.com/reuters/businessNews"
     enabled: true
+    max_items: 10                 # Optional: Fetch at most 10 articles from Reuters (overrides global batch_size_per_source)
+    max_article_age_minutes: 15   # Optional: Only ingest articles from the past 15 min for this feed
 
   - name: "CNBC Top News"
     type: "rss"
     url: "https://www.cnbc.com/id/100003114/device/rss/rss.html"
     enabled: true
-
-  - name: "Yahoo Finance"
-    type: "rss"
-    url: "https://finance.yahoo.com/news/rssindex"
-    enabled: true
-
-  - name: "MarketWatch Top Stories"
-    type: "rss"
-    url: "https://feeds.content.dowjones.io/public/rss/mw_topstories"
-    enabled: true
-
-  - name: "SEC Press Releases"
-    type: "rss"
-    url: "https://www.sec.gov/news/pressreleases.rss"
-    enabled: true
 ```
 - Set `enabled: false` to temporarily disable a source without deleting its entry.
+- Set `max_items: N` to limit articles fetched from a specific site.
+- Set `max_article_age_minutes: M` to set a custom recency threshold for a specific site.
 - Test individual feed ingestion anytime using:
   ```bash
   python -m src.main test-source --name "Reuters Business"
   ```
 
 ### 2. Tuning Engine Settings (`config/settings.yaml`)
-Control polling frequency, model parameters, and alert sensitivity thresholds:
+Control polling frequency, recency limits, model parameters, and alert sensitivity thresholds:
 ```yaml
 agent:
   polling_interval_minutes: 15    # Default cycle interval for daemon
-  batch_size_per_source: 15       # Maximum recent items parsed per source per cycle
+  batch_size_per_source: 15       # Global limit: max articles fetched per feed per cycle
+  max_article_age_minutes: 15     # Global recency filter: only fetch/process news from the past 15 min (set null/0 to disable)
   database_path: "data/agent.db"  # Path to SQLite database
+```
+
+#### CLI Overrides for Quick Testing
+You can also override these limits dynamically on the command line:
+```bash
+# Fetch only 5 articles per site, from the last 10 minutes:
+python -m src.main run-once --limit-per-source 5 --max-age-minutes 10
+
+# Or short aliases:
+python -m src.main run-once -b 5 -m 15
+```
 
 filter:
   min_confidence_score: 6         # Minimum LLM confidence score (1-10) to alert

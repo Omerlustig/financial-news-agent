@@ -179,6 +179,7 @@ def run_once(
     config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to settings.yaml"),
     sources: Optional[str] = typer.Option(None, "--sources", "-s", help="Path to sources.yaml"),
     alert_on_all: bool = typer.Option(False, "--alert-on-all", help="Bypass impact and confidence thresholds for testing"),
+    limit_per_source: Optional[int] = typer.Option(None, "--limit-per-source", "--batch-size", "-b", help="Max articles to fetch per site (overrides settings.yaml)"),
     max_age_minutes: Optional[int] = typer.Option(None, "--max-age-minutes", "-m", help="Filter articles older than N minutes (overrides settings.yaml)"),
 ) -> None:
     """Execute a single news scan, analysis, alerting, and persistence cycle."""
@@ -190,6 +191,7 @@ def run_once(
         settings=settings,
         sources=sources_list,
         alert_on_all=alert_on_all or settings.filter.alert_on_all,
+        batch_size_per_source=limit_per_source,
         max_article_age_minutes=max_age_minutes,
     )
 
@@ -218,6 +220,7 @@ def run(
     config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to settings.yaml"),
     sources: Optional[str] = typer.Option(None, "--sources", "-s", help="Path to sources.yaml"),
     alert_on_all: bool = typer.Option(False, "--alert-on-all", help="Bypass impact and confidence thresholds for testing"),
+    limit_per_source: Optional[int] = typer.Option(None, "--limit-per-source", "--batch-size", "-b", help="Max articles to fetch per site (overrides settings.yaml)"),
     max_age_minutes: Optional[int] = typer.Option(None, "--max-age-minutes", "-m", help="Filter articles older than N minutes (overrides settings.yaml)"),
 ) -> None:
     """Run news monitoring pipeline (daemon mode by default, or single-run if --no-daemon)."""
@@ -232,6 +235,7 @@ def run(
         settings=settings,
         sources=sources_list,
         alert_on_all=alert_on_all or settings.filter.alert_on_all,
+        batch_size_per_source=limit_per_source,
         max_article_age_minutes=max_age_minutes,
     )
 
