@@ -126,12 +126,15 @@ class MarketImpactAnalyzer:
                         self.max_retries,
                         article.title,
                     )
-                    response = litellm.completion(
-                        model=target_model,
-                        messages=messages,
-                        temperature=self.temperature,
-                        response_format={"type": "json_object"},
-                    )
+                    completion_kwargs: Dict[str, Any] = {
+                        "model": target_model,
+                        "messages": messages,
+                        "response_format": {"type": "json_object"},
+                    }
+                    if not ("gemini-3" in target_model or "gemini/gemini-3" in target_model):
+                        completion_kwargs["temperature"] = self.temperature
+
+                    response = litellm.completion(**completion_kwargs)
                     raw_content = self._extract_content(response)
                     analysis = self._parse_and_validate(raw_content, article)
 
