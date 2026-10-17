@@ -2,17 +2,17 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build an automated periodic news agent in `news-agent/` that ingests financial headlines, analyzes them with institutional stock market reasoning and confidence scoring (1–10 / Low–Critical), prevents duplicates with SQLite, and sends instant push alerts via Telegram.
+**Goal:** Build an automated periodic news agent in `new-agent/` that ingests financial headlines, analyzes them with institutional stock market reasoning and confidence scoring (1–10 / Low–Critical), prevents duplicates with SQLite, and sends instant push alerts via Telegram.
 
-**Architecture:** A modular pipeline orchestrated under `news-agent/` with clean boundaries: pluggable Ingestion (RSS/Atom), SQLite Deduplication/Storage (`WAL` mode), an LLM Market Impact Analyzer using LiteLLM with structured Pydantic schema, a formatted Telegram Notifier, and a dual-mode CLI supporting both continuous background daemon loops and one-shot cron/serverless executions.
+**Architecture:** A modular pipeline orchestrated under `new-agent/` with clean boundaries: pluggable Ingestion (RSS/Atom), SQLite Deduplication/Storage (`WAL` mode), an LLM Market Impact Analyzer using LiteLLM with structured Pydantic schema, a formatted Telegram Notifier, and a dual-mode CLI supporting both continuous background daemon loops and one-shot cron/serverless executions.
 
 **Tech Stack:** Python 3.11+, Pydantic v2, LiteLLM, feedparser, requests, python-telegram-bot / direct Telegram Bot API, typer/click, SQLite3, pytest, pytest-asyncio, Docker.
 
-**Spec:** [docs/superpowers/specs/2026-10-17-market-news-agent-design.md](file:///Users/omer.lustig/IdeaProjects/omer/docs/superpowers/specs/2026-10-17-market-news-agent-design.md)
+**Spec:** [docs/superpowers/specs/2026-10-17-market-new-agent-design.md](file:///Users/omer.lustig/IdeaProjects/omer/docs/superpowers/specs/2026-10-17-market-new-agent-design.md)
 
 ## Global Constraints
 
-- All source code, configs, tests, and deployment files must reside under `news-agent/`.
+- All source code, configs, tests, and deployment files must reside under `new-agent/`.
 - Zero duplicate alerts: Deduplication must be backed by SQLite using SHA-256 content hashes (`url + title`).
 - Scoring rubric must be strictly calibrated from 1 to 10 with matching grades (`LOW`, `AVERAGE`, `HIGH`, `CRITICAL`).
 - Ingestion must be resilient: failure of one feed or website must not crash or halt the pipeline.
@@ -33,16 +33,16 @@
 **Role Perspectives**: Expert Software Architect & Developer
 
 **Files:**
-- Create: `news-agent/requirements.txt`
-- Create: `news-agent/requirements-dev.txt`
-- Create: `news-agent/.env.example`
-- Create: `news-agent/config/settings.yaml`
-- Create: `news-agent/config/sources.yaml`
-- Create: `news-agent/src/__init__.py`
-- Create: `news-agent/src/models.py`
-- Create: `news-agent/src/config.py`
-- Create: `news-agent/tests/__init__.py`
-- Create: `news-agent/tests/test_config.py`
+- Create: `new-agent/requirements.txt`
+- Create: `new-agent/requirements-dev.txt`
+- Create: `new-agent/.env.example`
+- Create: `new-agent/config/settings.yaml`
+- Create: `new-agent/config/sources.yaml`
+- Create: `new-agent/src/__init__.py`
+- Create: `new-agent/src/models.py`
+- Create: `new-agent/src/config.py`
+- Create: `new-agent/tests/__init__.py`
+- Create: `new-agent/tests/test_config.py`
 
 **Interfaces:**
 - Consumes: None (Root foundation)
@@ -53,11 +53,11 @@
   - `load_settings(config_path: Optional[str]) -> Settings`
   - `load_sources(sources_path: Optional[str]) -> List[SourceConfig]`
 
-- [ ] **Step 1: Write the failing tests in `news-agent/tests/test_config.py`**
+- [ ] **Step 1: Write the failing tests in `new-agent/tests/test_config.py`**
 
 ```python
-from news-agent.src.models import RawArticle, MarketImpactAnalysis, ImpactGrade
-from news-agent.src.config import load_settings, load_sources
+from new-agent.src.models import RawArticle, MarketImpactAnalysis, ImpactGrade
+from new-agent.src.config import load_settings, load_sources
 
 def test_raw_article_hash():
     a1 = RawArticle(title="Chip export curbs", url="https://news.com/1", source_name="Reuters", published_at=None, summary="Test")
@@ -80,26 +80,26 @@ sources:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pytest news-agent/tests/test_config.py -v`
+Run: `pytest new-agent/tests/test_config.py -v`
 Expected: FAIL (ModuleNotFoundError)
 
 - [ ] **Step 3: Implement dependencies, models, and configuration loaders**
 
-1. Create `news-agent/requirements.txt` with `pydantic>=2.0`, `pyyaml>=6.0`, `litellm>=1.30.0`, `feedparser>=6.0.10`, `requests>=2.31.0`, `typer>=0.9.0`, `python-dotenv>=1.0.0`.
-2. Create `news-agent/requirements-dev.txt` with `pytest>=8.0.0`, `pytest-asyncio>=0.23.0`.
-3. Implement `RawArticle`, `ImpactGrade`, and `MarketImpactAnalysis` in `news-agent/src/models.py`.
-4. Implement `load_settings` and `load_sources` in `news-agent/src/config.py` using Pydantic and PyYAML.
+1. Create `new-agent/requirements.txt` with `pydantic>=2.0`, `pyyaml>=6.0`, `litellm>=1.30.0`, `feedparser>=6.0.10`, `requests>=2.31.0`, `typer>=0.9.0`, `python-dotenv>=1.0.0`.
+2. Create `new-agent/requirements-dev.txt` with `pytest>=8.0.0`, `pytest-asyncio>=0.23.0`.
+3. Implement `RawArticle`, `ImpactGrade`, and `MarketImpactAnalysis` in `new-agent/src/models.py`.
+4. Implement `load_settings` and `load_sources` in `new-agent/src/config.py` using Pydantic and PyYAML.
 5. Create default `config/settings.yaml` and `config/sources.yaml` with top financial news feeds.
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `pytest news-agent/tests/test_config.py -v`
+Run: `pytest new-agent/tests/test_config.py -v`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add news-agent/
+git add new-agent/
 git commit -m "feat(core): setup project models, config loader and sources"
 ```
 
@@ -110,10 +110,10 @@ git commit -m "feat(core): setup project models, config loader and sources"
 **Role Perspectives**: Expert Developer & QA Engineer
 
 **Files:**
-- Create: `news-agent/src/ingestion/__init__.py`
-- Create: `news-agent/src/ingestion/base.py`
-- Create: `news-agent/src/ingestion/rss.py`
-- Create: `news-agent/tests/test_ingestion.py`
+- Create: `new-agent/src/ingestion/__init__.py`
+- Create: `new-agent/src/ingestion/base.py`
+- Create: `new-agent/src/ingestion/rss.py`
+- Create: `new-agent/tests/test_ingestion.py`
 
 **Interfaces:**
 - Consumes: `RawArticle`, `SourceConfig` from Task 1
@@ -122,12 +122,12 @@ git commit -m "feat(core): setup project models, config loader and sources"
   - `RSSFetcher(source_config: SourceConfig).fetch() -> List[RawArticle]`
   - `fetch_all_sources(sources: List[SourceConfig]) -> List[RawArticle]`
 
-- [ ] **Step 1: Write the failing tests in `news-agent/tests/test_ingestion.py`**
+- [ ] **Step 1: Write the failing tests in `new-agent/tests/test_ingestion.py`**
 
 ```python
 from unittest.mock import patch
-from news-agent.src.config import SourceConfig
-from news-agent.src.ingestion.rss import RSSFetcher, fetch_all_sources
+from new-agent.src.config import SourceConfig
+from new-agent.src.ingestion.rss import RSSFetcher, fetch_all_sources
 
 MOCK_RSS_XML = """<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
@@ -169,24 +169,24 @@ def test_rss_fetcher_handles_feed_failure_gracefully():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pytest news-agent/tests/test_ingestion.py -v`
+Run: `pytest new-agent/tests/test_ingestion.py -v`
 Expected: FAIL (ImportError / ModuleNotFoundError)
 
 - [ ] **Step 3: Implement `BaseFetcher` and `RSSFetcher`**
 
 1. Define `BaseFetcher` abstract class with `fetch() -> List[RawArticle]`.
-2. Implement `RSSFetcher` in `news-agent/src/ingestion/rss.py` using `feedparser`, normalizing publication dates to UTC datetime, stripping HTML tags from summaries, and wrapping network errors in try/except blocks.
+2. Implement `RSSFetcher` in `new-agent/src/ingestion/rss.py` using `feedparser`, normalizing publication dates to UTC datetime, stripping HTML tags from summaries, and wrapping network errors in try/except blocks.
 3. Implement `fetch_all_sources(sources: List[SourceConfig]) -> List[RawArticle]` iterating through enabled sources with feed-level error containment.
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `pytest news-agent/tests/test_ingestion.py -v`
+Run: `pytest new-agent/tests/test_ingestion.py -v`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add news-agent/src/ingestion/ news-agent/tests/test_ingestion.py
+git add new-agent/src/ingestion/ new-agent/tests/test_ingestion.py
 git commit -m "feat(ingestion): implement robust RSS/Atom news fetcher with error isolation"
 ```
 
@@ -197,10 +197,10 @@ git commit -m "feat(ingestion): implement robust RSS/Atom news fetcher with erro
 **Role Perspectives**: Expert Software Architect & QA Engineer
 
 **Files:**
-- Create: `news-agent/src/storage/__init__.py`
-- Create: `news-agent/src/storage/base.py`
-- Create: `news-agent/src/storage/sqlite.py`
-- Create: `news-agent/tests/test_storage.py`
+- Create: `new-agent/src/storage/__init__.py`
+- Create: `new-agent/src/storage/base.py`
+- Create: `new-agent/src/storage/sqlite.py`
+- Create: `new-agent/tests/test_storage.py`
 
 **Interfaces:**
 - Consumes: `RawArticle`, `MarketImpactAnalysis` from Task 1
@@ -210,11 +210,11 @@ git commit -m "feat(ingestion): implement robust RSS/Atom news fetcher with erro
   - `BaseStorage.record_article(article: RawArticle, analysis: Optional[MarketImpactAnalysis], alerted: bool) -> None`
   - `BaseStorage.get_stats() -> dict`
 
-- [ ] **Step 1: Write the failing tests in `news-agent/tests/test_storage.py`**
+- [ ] **Step 1: Write the failing tests in `new-agent/tests/test_storage.py`**
 
 ```python
-from news-agent.src.storage.sqlite import SQLiteStorage
-from news-agent.src.models import RawArticle, MarketImpactAnalysis, ImpactGrade
+from new-agent.src.storage.sqlite import SQLiteStorage
+from new-agent.src.models import RawArticle, MarketImpactAnalysis, ImpactGrade
 
 def test_deduplication_and_unseen_filter(tmp_path):
     db_path = str(tmp_path / "test.db")
@@ -244,12 +244,12 @@ def test_deduplication_and_unseen_filter(tmp_path):
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pytest news-agent/tests/test_storage.py -v`
+Run: `pytest new-agent/tests/test_storage.py -v`
 Expected: FAIL
 
 - [ ] **Step 3: Implement `SQLiteStorage` with WAL mode and schema migration**
 
-1. Create `news-agent/src/storage/sqlite.py` initializing schema:
+1. Create `new-agent/src/storage/sqlite.py` initializing schema:
    * `articles` table: `content_hash (PK)`, `url`, `title`, `source_name`, `published_at`, `created_at`, `is_market_moving`, `confidence_score`, `impact_grade`, `tickers`, `sectors`, `alerted`.
 2. Enable SQLite WAL mode (`PRAGMA journal_mode=WAL;`).
 3. Implement `filter_unseen` using batch queries (`SELECT content_hash FROM articles WHERE content_hash IN (...)`).
@@ -257,13 +257,13 @@ Expected: FAIL
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `pytest news-agent/tests/test_storage.py -v`
+Run: `pytest new-agent/tests/test_storage.py -v`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add news-agent/src/storage/ news-agent/tests/test_storage.py
+git add new-agent/src/storage/ new-agent/tests/test_storage.py
 git commit -m "feat(storage): implement SQLite deduplication engine with WAL mode"
 ```
 
@@ -274,10 +274,10 @@ git commit -m "feat(storage): implement SQLite deduplication engine with WAL mod
 **Role Perspectives**: Expert Financial Advisor, Stock Analyst & Developer
 
 **Files:**
-- Create: `news-agent/src/analysis/__init__.py`
-- Create: `news-agent/src/analysis/prompts.py`
-- Create: `news-agent/src/analysis/analyzer.py`
-- Create: `news-agent/tests/test_analysis.py`
+- Create: `new-agent/src/analysis/__init__.py`
+- Create: `new-agent/src/analysis/prompts.py`
+- Create: `new-agent/src/analysis/analyzer.py`
+- Create: `new-agent/tests/test_analysis.py`
 
 **Interfaces:**
 - Consumes: `RawArticle`, `MarketImpactAnalysis` from Task 1, LLM settings from `config.py`
@@ -285,12 +285,12 @@ git commit -m "feat(storage): implement SQLite deduplication engine with WAL mod
   - `build_analyst_prompt(article: RawArticle) -> Tuple[str, str]`
   - `MarketImpactAnalyzer.analyze(article: RawArticle) -> MarketImpactAnalysis`
 
-- [ ] **Step 1: Write the failing tests in `news-agent/tests/test_analysis.py`**
+- [ ] **Step 1: Write the failing tests in `new-agent/tests/test_analysis.py`**
 
 ```python
 from unittest.mock import patch
-from news-agent.src.models import RawArticle, ImpactGrade
-from news-agent.src.analysis.analyzer import MarketImpactAnalyzer
+from new-agent.src.models import RawArticle, ImpactGrade
+from new-agent.src.analysis.analyzer import MarketImpactAnalyzer
 
 MOCK_LLM_JSON = """{
   "is_market_moving": true,
@@ -324,27 +324,27 @@ def test_analyzer_parses_llm_response():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pytest news-agent/tests/test_analysis.py -v`
+Run: `pytest new-agent/tests/test_analysis.py -v`
 Expected: FAIL
 
 - [ ] **Step 3: Implement Financial Prompt Engineering & `MarketImpactAnalyzer`**
 
-1. In `news-agent/src/analysis/prompts.py`, write institutional financial analyst prompt:
+1. In `new-agent/src/analysis/prompts.py`, write institutional financial analyst prompt:
    * Rule-sets distinguishing 95% market noise from 5% genuine catalysts (unexpected M&A, regulatory shock, sudden rate pivots, surprise earnings with guidance cuts).
    * 1st-order and 2nd-order impact criteria.
    * Strict calibration rubric for 1-10 confidence scoring and `LOW`/`AVERAGE`/`HIGH`/`CRITICAL` grading.
    * Enforced JSON schema format.
-2. In `news-agent/src/analysis/analyzer.py`, call `litellm.completion` with JSON response format, retry backoff (3 attempts), and fallback handling for malformed JSON.
+2. In `new-agent/src/analysis/analyzer.py`, call `litellm.completion` with JSON response format, retry backoff (3 attempts), and fallback handling for malformed JSON.
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `pytest news-agent/tests/test_analysis.py -v`
+Run: `pytest new-agent/tests/test_analysis.py -v`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add news-agent/src/analysis/ news-agent/tests/test_analysis.py
+git add new-agent/src/analysis/ new-agent/tests/test_analysis.py
 git commit -m "feat(analysis): implement financial analyst LLM impact scoring and catalyst engine"
 ```
 
@@ -355,10 +355,10 @@ git commit -m "feat(analysis): implement financial analyst LLM impact scoring an
 **Role Perspectives**: Expert Developer & QA Engineer
 
 **Files:**
-- Create: `news-agent/src/notification/__init__.py`
-- Create: `news-agent/src/notification/base.py`
-- Create: `news-agent/src/notification/telegram.py`
-- Create: `news-agent/tests/test_notification.py`
+- Create: `new-agent/src/notification/__init__.py`
+- Create: `new-agent/src/notification/base.py`
+- Create: `new-agent/src/notification/telegram.py`
+- Create: `new-agent/tests/test_notification.py`
 
 **Interfaces:**
 - Consumes: `RawArticle`, `MarketImpactAnalysis` from Task 1
@@ -367,12 +367,12 @@ git commit -m "feat(analysis): implement financial analyst LLM impact scoring an
   - `TelegramNotifier(bot_token: str, chat_id: str).send_alert(article, analysis) -> bool`
   - `format_telegram_message(article: RawArticle, analysis: MarketImpactAnalysis) -> str`
 
-- [ ] **Step 1: Write the failing tests in `news-agent/tests/test_notification.py`**
+- [ ] **Step 1: Write the failing tests in `new-agent/tests/test_notification.py`**
 
 ```python
 from unittest.mock import patch
-from news-agent.src.models import RawArticle, MarketImpactAnalysis, ImpactGrade
-from news-agent.src.notification.telegram import TelegramNotifier, format_telegram_message
+from new-agent.src.models import RawArticle, MarketImpactAnalysis, ImpactGrade
+from new-agent.src.notification.telegram import TelegramNotifier, format_telegram_message
 
 def test_telegram_message_formatting():
     article = RawArticle(title="Fed cuts rates by 50bps", url="https://cnbc.com/rates", source_name="CNBC", published_at=None, summary="Fed surprise move")
@@ -401,24 +401,24 @@ def test_telegram_send_alert_success():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pytest news-agent/tests/test_notification.py -v`
+Run: `pytest new-agent/tests/test_notification.py -v`
 Expected: FAIL
 
 - [ ] **Step 3: Implement Telegram message formatting and HTTP dispatcher**
 
-1. Create `news-agent/src/notification/telegram.py`.
+1. Create `new-agent/src/notification/telegram.py`.
 2. Implement clean markdown formatting highlighting Grade Badge (`CRITICAL`, `HIGH`, etc.), Score, Impacted Tickers, Sectors, Summary, Analyst Thesis, and URL.
 3. Implement `send_message` with requests POST to `https://api.telegram.org/bot<token>/sendMessage`, handling network errors, HTTP 429 throttling, and logging failures.
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `pytest news-agent/tests/test_notification.py -v`
+Run: `pytest new-agent/tests/test_notification.py -v`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add news-agent/src/notification/ news-agent/tests/test_notification.py
+git add new-agent/src/notification/ new-agent/tests/test_notification.py
 git commit -m "feat(notification): implement Telegram alert formatter and push dispatcher"
 ```
 
@@ -429,10 +429,10 @@ git commit -m "feat(notification): implement Telegram alert formatter and push d
 **Role Perspectives**: Expert Software Architect, Developer & QA Engineer
 
 **Files:**
-- Create: `news-agent/src/pipeline.py`
-- Create: `news-agent/src/cli.py`
-- Create: `news-agent/src/main.py`
-- Create: `news-agent/tests/test_pipeline.py`
+- Create: `new-agent/src/pipeline.py`
+- Create: `new-agent/src/cli.py`
+- Create: `new-agent/src/main.py`
+- Create: `new-agent/tests/test_pipeline.py`
 
 **Interfaces:**
 - Consumes: Ingestion (Task 2), Storage (Task 3), Analyzer (Task 4), Notifier (Task 5)
@@ -440,12 +440,12 @@ git commit -m "feat(notification): implement Telegram alert formatter and push d
   - `Pipeline.run_cycle() -> CycleSummary`
   - CLI commands: `run`, `run-once`, `test-telegram`, `test-source`, `stats`
 
-- [ ] **Step 1: Write the failing tests in `news-agent/tests/test_pipeline.py`**
+- [ ] **Step 1: Write the failing tests in `new-agent/tests/test_pipeline.py`**
 
 ```python
 from unittest.mock import MagicMock
-from news-agent.src.pipeline import Pipeline
-from news-agent.src.models import RawArticle, MarketImpactAnalysis, ImpactGrade
+from new-agent.src.pipeline import Pipeline
+from new-agent.src.models import RawArticle, MarketImpactAnalysis, ImpactGrade
 
 def test_pipeline_filters_below_threshold():
     mock_storage = MagicMock()
@@ -476,12 +476,12 @@ def test_pipeline_filters_below_threshold():
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `pytest news-agent/tests/test_pipeline.py -v`
+Run: `pytest new-agent/tests/test_pipeline.py -v`
 Expected: FAIL
 
 - [ ] **Step 3: Implement `Pipeline` and Typer CLI**
 
-1. Implement `Pipeline` class in `news-agent/src/pipeline.py`:
+1. Implement `Pipeline` class in `new-agent/src/pipeline.py`:
    * `run_cycle()`: Fetches sources, filters unseen via SQLite, analyzes candidates with LLM, filters by `min_confidence_score` and `min_impact_grade`, dispatches Telegram alerts, and records results in SQLite.
 2. Implement `cli.py` using `typer`:
    * `run-once`: Executes a single `pipeline.run_cycle()` and prints summary statistics.
@@ -493,13 +493,13 @@ Expected: FAIL
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `pytest news-agent/tests/test_pipeline.py -v`
+Run: `pytest new-agent/tests/test_pipeline.py -v`
 Expected: PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add news-agent/src/pipeline.py news-agent/src/cli.py news-agent/src/main.py news-agent/tests/test_pipeline.py
+git add new-agent/src/pipeline.py new-agent/src/cli.py new-agent/src/main.py new-agent/tests/test_pipeline.py
 git commit -m "feat(pipeline): implement orchestration engine and dual-mode CLI"
 ```
 
@@ -510,13 +510,13 @@ git commit -m "feat(pipeline): implement orchestration engine and dual-mode CLI"
 **Role Perspectives**: Expert Software Architect & Developer
 
 **Files:**
-- Create: `news-agent/Dockerfile`
-- Create: `news-agent/docker-compose.yml`
-- Create: `news-agent/news-agent.service` (Systemd unit for EC2)
-- Create: `news-agent/README.md`
+- Create: `new-agent/Dockerfile`
+- Create: `new-agent/docker-compose.yml`
+- Create: `new-agent/new-agent.service` (Systemd unit for EC2)
+- Create: `new-agent/README.md`
 
 **Interfaces:**
-- Consumes: Entire `news-agent` system
+- Consumes: Entire `new-agent` system
 - Produces: Ready-to-deploy Docker image, compose file with volume persistence, systemd unit, and complete setup guide.
 
 - [ ] **Step 1: Create multi-stage `Dockerfile` and `docker-compose.yml`**
@@ -524,7 +524,7 @@ git commit -m "feat(pipeline): implement orchestration engine and dual-mode CLI"
 1. Python 3.11-slim base image, non-root user, SQLite persistent volume mount (`/app/data`).
 2. Compose file with auto-restart policy and `.env` loading.
 
-- [ ] **Step 2: Create EC2 systemd service template (`news-agent.service`)**
+- [ ] **Step 2: Create EC2 systemd service template (`new-agent.service`)**
 
 Systemd unit configured with `Restart=always`, `RestartSec=30`, and environment file loading.
 
@@ -539,12 +539,12 @@ Full guide for:
 
 - [ ] **Step 4: Run full test suite across the entire project**
 
-Run: `pytest news-agent/tests/ -v`
+Run: `pytest new-agent/tests/ -v`
 Expected: 100% tests PASS
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add news-agent/Dockerfile news-agent/docker-compose.yml news-agent/news-agent.service news-agent/README.md
+git add new-agent/Dockerfile new-agent/docker-compose.yml new-agent/new-agent.service new-agent/README.md
 git commit -m "docs(deploy): add Docker container, systemd service and operations guide"
 ```
