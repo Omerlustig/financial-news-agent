@@ -312,3 +312,76 @@ def test_telegram_send_message_network_exception():
     with patch("requests.post", side_effect=requests.exceptions.ConnectionError("Network drop")):
         success = notifier.send_message("Connection failure")
         assert success is False
+
+
+def test_telegram_message_truncation_on_oversized_input():
+    """Verify messages exceeding 4000 characters are safely truncated with ellipsis."""
+    massive_summary = "A" * 3000
+    massive_thesis = "B" * 2000
+    article = RawArticle(
+        title="Massive Headline That Is Very Long",
+        url="https://example.com/massive",
+        source_name="Financial Gazette",
+    )
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=8,
+        impact_grade=ImpactGrade.HIGH,
+        affected_tickers=["$BIG"],
+        affected_sectors=["MegaCap"],
+        summary=massive_summary,
+        catalyst_thesis=massive_thesis,
+    )
+    msg = format_telegram_message(article, analysis)
+    assert len(msg) <= 4000
+    assert msg.endswith("...")
+    assert "[HIGH | Score: 8/10]" in msg
+
+
+def test_telegram_notifier_redacts_bot_token_in_logs(caplog):
+    """Verify bot token is redacted as [REDACTED_TOKEN] in error and warning logs."""
+    import logging
+    secret_token = "SECRET_BOT_TOKEN_98765"
+    notifier = TelegramNotifier(bot_token=secret_token, chat_id="12345")
+
+    with caplog.at_level(logging.WARNING):
+        # 1. Network exception containing token in url
+        err_msg = f"Failed to connect to https://api.telegram.org/bot{secret_token}/sendMessage"
+        with patch("requests.post", side_effect=requests.exceptions.ConnectionError(err_msg)):
+            res = notifier.send_message("Test")
+            assert res is False
+            assert secret_token not in caplog.text
+            assert "[REDACTED_TOKEN]" in caplog.text
+
+        caplog.clear()
+
+        # 2. HTTP error response containing token
+        mock_resp = MagicMock()
+        mock_resp.status_code = 400
+        mock_resp.text = f"Invalid token: {secret_token}"
+        with patch("requests.post", return_value=mock_resp):
+            res = notifier.send_message("Test")
+            assert res is False
+            assert secret_token not in caplog.text
+            assert "[REDACTED_TOKEN]" in caplog.text
+
+
+def test_telegram_send_message_http_429_clamped_sleep():
+    """Verify HTTP 429 delays are clamped to MAX_RETRY_SLEEP_SECONDS (60.0s)."""
+    notifier = TelegramNotifier(bot_token="token", chat_id="123", max_retries=1)
+
+    resp_429 = MagicMock()
+    resp_429.status_code = 429
+    resp_429.headers = {"Retry-After": "300"}  # 5 minutes
+    resp_429.json.return_value = {"ok": False, "error_code": 429}
+
+    resp_200 = MagicMock()
+    resp_200.status_code = 200
+    resp_200.json.return_value = {"ok": True}
+
+    with patch("requests.post", side_effect=[resp_429, resp_200]), \
+         patch("time.sleep") as mock_sleep:
+        success = notifier.send_message("Test clamped sleep")
+        assert success is True
+        mock_sleep.assert_called_once_with(60.0)
+

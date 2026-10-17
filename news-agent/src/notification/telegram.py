@@ -1,7 +1,7 @@
 import html
 import logging
 import time
-from typing import Optional
+from typing import Any, Optional
 
 import requests
 
@@ -9,6 +9,9 @@ from src.models import RawArticle, MarketImpactAnalysis, ImpactGrade
 from src.notification.base import BaseNotifier
 
 logger = logging.getLogger(__name__)
+
+MAX_TELEGRAM_MESSAGE_LENGTH = 4000
+MAX_RETRY_SLEEP_SECONDS = 60.0
 
 GRADE_BADGES = {
     ImpactGrade.CRITICAL: ("🚨", "CRITICAL"),
@@ -39,6 +42,7 @@ def format_telegram_message(
     Includes severity badge, score, directional stance (if present),
     impacted tickers, affected sectors, headline, source metadata,
     executive summary, analyst thesis, and direct source link.
+    Truncates output if it exceeds MAX_TELEGRAM_MESSAGE_LENGTH (4000 characters).
     """
     badge_icon, grade_name = GRADE_BADGES.get(
         analysis.impact_grade,
@@ -101,7 +105,22 @@ def format_telegram_message(
         f"🔗 <a href=\"{escaped_url_attr}\">{escaped_url_text}</a>",
     ])
 
-    return "\n".join(lines)
+    formatted = "\n".join(lines)
+    if len(formatted) > MAX_TELEGRAM_MESSAGE_LENGTH:
+        cutoff = MAX_TELEGRAM_MESSAGE_LENGTH - 3
+        truncated = formatted[:cutoff]
+        # Avoid splitting HTML entities or opening tags
+        last_amp = truncated.rfind("&")
+        last_semi = truncated.rfind(";")
+        if last_amp != -1 and last_amp > last_semi:
+            truncated = truncated[:last_amp]
+        last_lt = truncated.rfind("<")
+        last_gt = truncated.rfind(">")
+        if last_lt != -1 and last_lt > last_gt:
+            truncated = truncated[:last_lt]
+        formatted = truncated + "..."
+
+    return formatted
 
 
 class TelegramNotifier(BaseNotifier):
@@ -126,6 +145,13 @@ class TelegramNotifier(BaseNotifier):
         """Check if bot token and target chat ID are provided and non-empty."""
         return bool(self.bot_token and self.chat_id)
 
+    def _redact_token(self, value: Any) -> str:
+        """Ensure bot token is redacted from string representations in logs."""
+        s = str(value)
+        if self.bot_token and self.bot_token in s:
+            return s.replace(self.bot_token, "[REDACTED_TOKEN]")
+        return s
+
     def send_alert(self, article: RawArticle, analysis: MarketImpactAnalysis) -> bool:
         """Format and dispatch an alert for a market-moving event.
 
@@ -140,7 +166,7 @@ class TelegramNotifier(BaseNotifier):
             message = format_telegram_message(article, analysis)
             return self.send_message(message)
         except Exception as exc:
-            logger.error("Failed to construct or dispatch Telegram alert: %s", exc, exc_info=True)
+            logger.error("Failed to construct or dispatch Telegram alert: %s", self._redact_token(exc))
             return False
 
     def send_message(self, text: str) -> bool:
@@ -182,27 +208,30 @@ class TelegramNotifier(BaseNotifier):
                         )
                         return False
 
-                    retry_after = 1.0
+                    raw_retry_after = 1.0
                     if "Retry-After" in response.headers:
                         try:
-                            retry_after = float(response.headers["Retry-After"])
+                            raw_retry_after = float(response.headers["Retry-After"])
                         except (ValueError, TypeError):
-                            retry_after = 1.0
+                            raw_retry_after = 1.0
                     else:
                         try:
                             res_json = response.json()
                             if isinstance(res_json, dict) and "parameters" in res_json:
-                                retry_after = float(res_json["parameters"].get("retry_after", 1.0))
+                                raw_retry_after = float(res_json["parameters"].get("retry_after", 1.0))
                         except Exception:
-                            retry_after = 1.0
+                            raw_retry_after = 1.0
+
+                    # Clamp retry delay to avoid blocking indefinitely
+                    sleep_time = min(max(0.0, raw_retry_after), MAX_RETRY_SLEEP_SECONDS)
 
                     logger.warning(
                         "TelegramNotifier: Rate limited (HTTP 429). Retrying in %.2f seconds (attempt %d/%d)...",
-                        retry_after,
+                        sleep_time,
                         retries,
                         self.max_retries,
                     )
-                    time.sleep(retry_after)
+                    time.sleep(sleep_time)
                     continue
 
                 # Handle HTTP 200
@@ -213,26 +242,26 @@ class TelegramNotifier(BaseNotifier):
                             return True
                         logger.error(
                             "Telegram API returned 200 OK but ok=False: %s",
-                            res_json,
+                            self._redact_token(res_json),
                         )
                         return False
                     except Exception as json_err:
-                        logger.error("Failed to decode Telegram JSON response: %s", json_err)
+                        logger.error("Failed to decode Telegram JSON response: %s", self._redact_token(json_err))
                         return False
 
                 # Non-200 and Non-429 error codes
                 logger.error(
                     "Telegram API dispatch failed with HTTP %d: %s",
                     response.status_code,
-                    response.text,
+                    self._redact_token(response.text),
                 )
                 return False
 
             except requests.exceptions.RequestException as req_err:
-                logger.error("Telegram API network request error: %s", req_err)
+                logger.error("Telegram API network request error: %s", self._redact_token(req_err))
                 return False
             except Exception as exc:
-                logger.error("Unexpected error dispatching Telegram message: %s", exc, exc_info=True)
+                logger.error("Unexpected error dispatching Telegram message: %s", self._redact_token(exc))
                 return False
 
         return False
