@@ -1,7 +1,8 @@
 import html
 import logging
+import re
 import time
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 import requests
 
@@ -32,95 +33,202 @@ def escape_html(text: Optional[str]) -> str:
     return html.escape(str(text), quote=False)
 
 
+def safe_truncate_html(text: str, max_length: int = MAX_TELEGRAM_MESSAGE_LENGTH) -> str:
+    """Safely truncate HTML formatted text to max_length without breaking tags or entities."""
+    if len(text) <= max_length:
+        return text
+
+    ellipsis = "..."
+    available_len = max_length - len(ellipsis)
+    truncated = text[:available_len]
+
+    # Avoid cutting inside an HTML entity (e.g. &amp;)
+    last_amp = truncated.rfind("&")
+    last_semi = truncated.rfind(";")
+    if last_amp != -1 and last_amp > last_semi:
+        truncated = truncated[:last_amp]
+
+    # Avoid cutting inside an HTML tag (<b... or </b...)
+    last_lt = truncated.rfind("<")
+    last_gt = truncated.rfind(">")
+    if last_lt != -1 and last_lt > last_gt:
+        truncated = truncated[:last_lt]
+
+    tag_pattern = re.compile(r"<(/?)([a-zA-Z0-9]+)(?:\s+[^>]*)?>")
+
+    def get_closing_tags(s: str) -> str:
+        open_tags: List[str] = []
+        for match in tag_pattern.finditer(s):
+            is_closing = match.group(1) == "/"
+            tag_name = match.group(2).lower()
+            if not is_closing:
+                open_tags.append(tag_name)
+            else:
+                if open_tags and open_tags[-1] == tag_name:
+                    open_tags.pop()
+        return "".join(f"</{tag}>" for tag in reversed(open_tags))
+
+    closing = get_closing_tags(truncated)
+    while len(truncated) + len(ellipsis) + len(closing) > max_length and len(truncated) > 0:
+        truncated = truncated[:-1]
+        last_lt = truncated.rfind("<")
+        last_gt = truncated.rfind(">")
+        if last_lt != -1 and last_lt > last_gt:
+            truncated = truncated[:last_lt]
+        last_amp = truncated.rfind("&")
+        last_semi = truncated.rfind(";")
+        if last_amp != -1 and last_amp > last_semi:
+            truncated = truncated[:last_amp]
+        closing = get_closing_tags(truncated)
+
+    return truncated + ellipsis + closing
+
+
 def format_telegram_message(
     article: RawArticle,
     analysis: MarketImpactAnalysis,
     directional_stance: Optional[str] = None,
 ) -> str:
-    """Format a market impact analysis into a Telegram HTML message.
+    """Format an institutional market impact analysis into a Telegram HTML alert.
 
-    Includes severity badge, score, directional stance (if present),
-    impacted tickers, affected sectors, headline, source metadata,
-    executive summary, analyst thesis, and direct source link.
-    Truncates output if it exceeds MAX_TELEGRAM_MESSAGE_LENGTH (4000 characters).
+    Follows the institutional causal alert specification:
+    - Header: 🚨 [OPPORTUNITY CANDIDATE | Score: {score}/10 | {grade}]
+    - Stance & Time Horizon: 📈 Stance: {stance} and ⏱ Horizon: {time_horizon} (if available)
+    - Sectors: 🏭 Sectors: {sectors}
+    - Headline, Publisher, and UTC Timestamp
+    - Executive Summary: 2-3 sentence neutral facts brief
+    - Causal Mechanism: Detailed transmission channel from causal_chain.economic_mechanism
+    - Beneficiaries vs Negatively Exposed:
+      * 🟢 Beneficiaries: {beneficiaries}
+      * 🔴 Negatively Exposed: {negatively_exposed}
+    - Counterarguments & Invalidation:
+      * ⚖️ Counterarguments: {counterarguments}
+      * 🛑 Invalidation Condition: {invalidation_conditions}
+    - Direct URL Link to original source
+    - Mandatory compliance hypothesis disclaimer
+
+    Maintains robust HTML escaping and 4000-character safe truncation.
     """
-    badge_icon, grade_name = GRADE_BADGES.get(
-        analysis.impact_grade,
-        ("🔔", getattr(analysis.impact_grade, "value", str(analysis.impact_grade))),
+    grade_name = (
+        getattr(analysis.impact_grade, "value", str(analysis.impact_grade)).upper()
+        if analysis.impact_grade
+        else "UNKNOWN"
     )
-    score = analysis.confidence_score
-
-    # Check for directional stance
-    stance = directional_stance or getattr(analysis, "directional_stance", None) or getattr(analysis, "stance", None)
-    stance_line = ""
-    if stance:
-        stance_str = str(stance).strip()
-        lower_stance = stance_str.lower()
-        if any(w in lower_stance for w in ["bull", "up", "pos", "long", "call"]):
-            stance_icon = "📈"
-        elif any(w in lower_stance for w in ["bear", "down", "neg", "short", "put"]):
-            stance_icon = "📉"
-        else:
-            stance_icon = "⚖️"
-        stance_line = f"{stance_icon} <b>Stance:</b> {escape_html(stance_str)}\n"
-
-    # Publication date formatting
-    if article.published_at:
-        pub_time = article.published_at.strftime("%Y-%m-%d %H:%M UTC")
-    else:
-        pub_time = "N/A"
-
-    # Tickers and Sectors
-    tickers_str = ", ".join(analysis.affected_tickers) if analysis.affected_tickers else "None"
-    sectors_str = ", ".join(analysis.affected_sectors) if analysis.affected_sectors else "None"
-
-    # Escape dynamic text fields
-    escaped_title = escape_html(article.title)
-    escaped_source = escape_html(article.source_name)
-    escaped_tickers = escape_html(tickers_str)
-    escaped_sectors = escape_html(sectors_str)
-    escaped_summary = escape_html(analysis.summary)
-    escaped_thesis = escape_html(analysis.catalyst_thesis)
-    escaped_url_attr = html.escape(article.url, quote=True)
-    escaped_url_text = escape_html(article.url)
+    score = analysis.confidence_score if analysis.confidence_score is not None else 0
 
     lines = [
-        f"{badge_icon} <b>[{grade_name} | Score: {score}/10]</b>",
+        f"🚨 <b>[OPPORTUNITY CANDIDATE | Score: {score}/10 | {escape_html(grade_name)}]</b>"
     ]
-    if stance_line:
-        lines.append(stance_line.strip())
 
-    lines.extend([
-        f"<b>Headline:</b> {escaped_title}",
-        f"<b>Source:</b> {escaped_source} | <b>Published:</b> {pub_time}",
-        f"<b>Tickers:</b> {escaped_tickers}",
-        f"<b>Sectors:</b> {escaped_sectors}",
-        "",
-        "<b>Executive Summary:</b>",
-        escaped_summary,
-        "",
-        "<b>Analyst Thesis:</b>",
-        escaped_thesis,
-        "",
-        f"🔗 <a href=\"{escaped_url_attr}\">{escaped_url_text}</a>",
-    ])
+    # Stance & Time Horizon
+    stance = directional_stance or getattr(analysis, "directional_stance", None) or getattr(analysis, "stance", None)
+    stance_val = getattr(stance, "value", str(stance)).strip() if stance else None
+
+    time_horizon = getattr(analysis, "time_horizon", None)
+    horizon_val = getattr(time_horizon, "value", str(time_horizon)).strip() if time_horizon else None
+
+    meta_parts: List[str] = []
+    if stance_val:
+        lower_stance = stance_val.lower()
+        if any(w in lower_stance for w in ["bear", "down", "neg", "short"]):
+            stance_icon = "📉"
+        elif any(w in lower_stance for w in ["volatile"]):
+            stance_icon = "⚡"
+        elif any(w in lower_stance for w in ["neutral"]):
+            stance_icon = "⚖️"
+        else:
+            stance_icon = "📈"
+        meta_parts.append(f"{stance_icon} <b>Stance:</b> {escape_html(stance_val)}")
+
+    if horizon_val:
+        meta_parts.append(f"⏱ <b>Horizon:</b> {escape_html(horizon_val)}")
+
+    if meta_parts:
+        lines.append(" | ".join(meta_parts))
+
+    # Sectors
+    sectors: List[str] = []
+    if analysis.causal_chain and analysis.causal_chain.affected_sectors:
+        sectors = analysis.causal_chain.affected_sectors
+    elif analysis.affected_sectors:
+        sectors = analysis.affected_sectors
+    sectors_str = ", ".join(sectors) if sectors else "None"
+    lines.append(f"🏭 <b>Sectors:</b> {escape_html(sectors_str)}")
+
+    # Headline, Publisher, and UTC Timestamp
+    pub_time = article.published_at.strftime("%Y-%m-%d %H:%M UTC") if article.published_at else "N/A"
+    lines.append(f"<b>Headline:</b> {escape_html(article.title)}")
+    lines.append(f"<b>Publisher:</b> {escape_html(article.source_name)} | <b>Published:</b> {pub_time}")
+
+    # Executive Summary
+    summary = analysis.summary
+    if not summary and analysis.causal_chain and analysis.causal_chain.event_facts:
+        summary = analysis.causal_chain.event_facts
+    summary_text = summary if summary else "None"
+    lines.append("")
+    lines.append("<b>Executive Summary:</b>")
+    lines.append(escape_html(summary_text))
+
+    # Causal Mechanism
+    if analysis.causal_chain and analysis.causal_chain.economic_mechanism:
+        mechanism = analysis.causal_chain.economic_mechanism
+    elif analysis.catalyst_thesis:
+        mechanism = analysis.catalyst_thesis
+    else:
+        mechanism = "None"
+    lines.append("")
+    lines.append("<b>Causal Mechanism:</b>")
+    lines.append(escape_html(mechanism))
+
+    # Beneficiaries vs Negatively Exposed
+    if analysis.causal_chain:
+        beneficiaries = analysis.causal_chain.beneficiaries
+        negatively_exposed = analysis.causal_chain.negatively_exposed
+    else:
+        if stance_val and any(w in stance_val.lower() for w in ["bear", "down", "neg", "short"]):
+            beneficiaries = []
+            negatively_exposed = analysis.affected_tickers
+        else:
+            beneficiaries = analysis.affected_tickers
+            negatively_exposed = []
+
+    beneficiaries_str = ", ".join(beneficiaries) if beneficiaries else "None"
+    negatively_exposed_str = ", ".join(negatively_exposed) if negatively_exposed else "None"
+    lines.append("")
+    lines.append(f"🟢 <b>Beneficiaries:</b> {escape_html(beneficiaries_str)}")
+    lines.append(f"🔴 <b>Negatively Exposed:</b> {escape_html(negatively_exposed_str)}")
+
+    # Counterarguments & Invalidation
+    if analysis.causal_chain and analysis.causal_chain.counterarguments:
+        counterarguments = analysis.causal_chain.counterarguments
+    else:
+        counterarguments = "None"
+
+    if analysis.causal_chain and analysis.causal_chain.invalidation_conditions:
+        invalidation = analysis.causal_chain.invalidation_conditions
+    else:
+        invalidation = "None"
+
+    lines.append("")
+    lines.append(f"⚖️ <b>Counterarguments:</b> {escape_html(counterarguments)}")
+    lines.append(f"🛑 <b>Invalidation Condition:</b> {escape_html(invalidation)}")
+
+    # Direct URL Link
+    escaped_url_attr = html.escape(article.url, quote=True)
+    escaped_url_text = escape_html(article.url)
+    lines.append("")
+    lines.append(f'🔗 <a href="{escaped_url_attr}">{escaped_url_text}</a>')
+
+    # Mandatory Disclaimer at footer
+    disclaimer_text = (
+        getattr(analysis, "disclaimer", None)
+        or "⚠️ News-derived hypothesis. Market pricing, valuation, and entry points were not checked."
+    )
+    lines.append("")
+    lines.append(f"<i>{escape_html(disclaimer_text)}</i>")
 
     formatted = "\n".join(lines)
-    if len(formatted) > MAX_TELEGRAM_MESSAGE_LENGTH:
-        cutoff = MAX_TELEGRAM_MESSAGE_LENGTH - 3
-        truncated = formatted[:cutoff]
-        # Avoid splitting HTML entities or opening tags
-        last_amp = truncated.rfind("&")
-        last_semi = truncated.rfind(";")
-        if last_amp != -1 and last_amp > last_semi:
-            truncated = truncated[:last_amp]
-        last_lt = truncated.rfind("<")
-        last_gt = truncated.rfind(">")
-        if last_lt != -1 and last_lt > last_gt:
-            truncated = truncated[:last_lt]
-        formatted = truncated + "..."
-
-    return formatted
+    return safe_truncate_html(formatted, max_length=MAX_TELEGRAM_MESSAGE_LENGTH)
 
 
 class TelegramNotifier(BaseNotifier):

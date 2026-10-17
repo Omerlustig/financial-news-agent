@@ -3,7 +3,16 @@ from unittest.mock import patch, MagicMock
 import pytest
 import requests
 
-from src.models import RawArticle, MarketImpactAnalysis, ImpactGrade
+from src.models import (
+    RawArticle,
+    MarketImpactAnalysis,
+    ImpactGrade,
+    CausalChain,
+    DirectionalStance,
+    TimeHorizon,
+    EventStatus,
+    HardGates,
+)
 from src.notification.base import BaseNotifier
 from src.notification.telegram import (
     TelegramNotifier,
@@ -38,7 +47,7 @@ def test_telegram_message_formatting():
     )
     msg = format_telegram_message(article, analysis)
 
-    assert "[CRITICAL | Score: 9/10]" in msg
+    assert "[OPPORTUNITY CANDIDATE | Score: 9/10 | CRITICAL]" in msg
     assert "🚨" in msg
     assert "$SPY" in msg
     assert "$QQQ" in msg
@@ -60,12 +69,12 @@ def test_telegram_message_formatting_all_grades():
         source_name="Reuters",
     )
     grades_and_emojis = [
-        (ImpactGrade.LOW, 2, "ℹ️", "LOW"),
-        (ImpactGrade.AVERAGE, 5, "📊", "AVERAGE"),
-        (ImpactGrade.HIGH, 8, "⚡", "HIGH"),
-        (ImpactGrade.CRITICAL, 10, "🚨", "CRITICAL"),
+        (ImpactGrade.LOW, 2, "LOW"),
+        (ImpactGrade.AVERAGE, 5, "AVERAGE"),
+        (ImpactGrade.HIGH, 8, "HIGH"),
+        (ImpactGrade.CRITICAL, 10, "CRITICAL"),
     ]
-    for grade, score, emoji, label in grades_and_emojis:
+    for grade, score, label in grades_and_emojis:
         analysis = MarketImpactAnalysis(
             is_market_moving=True,
             confidence_score=score,
@@ -76,9 +85,9 @@ def test_telegram_message_formatting_all_grades():
             catalyst_thesis="Test thesis.",
         )
         msg = format_telegram_message(article, analysis)
-        expected_badge = f"[{label} | Score: {score}/10]"
+        expected_badge = f"[OPPORTUNITY CANDIDATE | Score: {score}/10 | {label}]"
         assert expected_badge in msg
-        assert emoji in msg
+        assert "🚨" in msg
 
 
 def test_telegram_message_formatting_with_directional_stance():
@@ -193,7 +202,7 @@ def test_telegram_send_alert_success():
         json_payload = call_kwargs["json"]
         assert json_payload["chat_id"] == "12345"
         assert json_payload["parse_mode"] == "HTML"
-        assert "[CRITICAL | Score: 9/10]" in json_payload["text"]
+        assert "[OPPORTUNITY CANDIDATE | Score: 9/10 | CRITICAL]" in json_payload["text"]
 
 
 def test_telegram_send_message_unconfigured():
@@ -334,8 +343,8 @@ def test_telegram_message_truncation_on_oversized_input():
     )
     msg = format_telegram_message(article, analysis)
     assert len(msg) <= 4000
-    assert msg.endswith("...")
-    assert "[HIGH | Score: 8/10]" in msg
+    assert "..." in msg
+    assert "[OPPORTUNITY CANDIDATE | Score: 8/10 | HIGH]" in msg
 
 
 def test_telegram_notifier_redacts_bot_token_in_logs(caplog):
@@ -384,4 +393,83 @@ def test_telegram_send_message_http_429_clamped_sleep():
         success = notifier.send_message("Test clamped sleep")
         assert success is True
         mock_sleep.assert_called_once_with(60.0)
+
+
+def test_telegram_message_formatting_institutional_causal_chain():
+    """Verify Telegram formatting contains causal mechanism, beneficiaries,
+    negatively exposed, counterarguments, invalidation conditions, and disclaimer.
+    """
+    article = RawArticle(
+        title="US Grants Advanced Semiconductor Export Exemptions to Allied Defense Consortium",
+        url="https://reuters.com/business/semiconductors-allied-exemption",
+        source_name="Reuters",
+        published_at=datetime(2026, 10, 17, 16, 45, tzinfo=timezone.utc),
+        summary="Department of Commerce published new rule granting expedited licensing.",
+    )
+    causal_chain = CausalChain(
+        event_facts="Commerce Department enacted expedited licensing rule for defense AI chip shipments to allied nations.",
+        economic_mechanism="Eliminates 6-9 month export review cycle, accelerating booked backlog recognition and gross margins.",
+        affected_sectors=["Semiconductors", "Defense Tech"],
+        beneficiaries=["$NVDA", "$AVGO"],
+        negatively_exposed=["$INTC"],
+        counterarguments="Legislative challenge in Congress could delay implementation window by 60 days.",
+        invalidation_conditions="Federal register rule revocation or injunction issued by trade court.",
+    )
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=9,
+        impact_grade=ImpactGrade.CRITICAL,
+        status=EventStatus.OPPORTUNITY_CANDIDATE,
+        directional_stance=DirectionalStance.BULLISH,
+        time_horizon=TimeHorizon.SHORT_TERM,
+        affected_tickers=["$NVDA", "$AVGO", "$INTC"],
+        affected_sectors=["Semiconductors", "Defense Tech"],
+        summary="US Commerce Department granted expedited semiconductor export licensing to defense partners.",
+        catalyst_thesis="Backlog clearance will re-rate high-margin enterprise data center earnings.",
+        causal_chain=causal_chain,
+        hard_gates=HardGates(
+            is_novel=True,
+            is_verified=True,
+            has_direct_exposure=True,
+            passes_all_gates=True,
+        ),
+    )
+
+    msg = format_telegram_message(article, analysis)
+
+    # 1. Header
+    assert "🚨 <b>[OPPORTUNITY CANDIDATE | Score: 9/10 | CRITICAL]</b>" in msg
+
+    # 2. Stance & Time Horizon
+    assert "📈 <b>Stance:</b> BULLISH" in msg
+    assert "⏱ <b>Horizon:</b> SHORT_TERM" in msg
+
+    # 3. Sectors
+    assert "🏭 <b>Sectors:</b> Semiconductors, Defense Tech" in msg
+
+    # 4. Headline, Publisher, and UTC Timestamp
+    assert "<b>Headline:</b> US Grants Advanced Semiconductor Export Exemptions to Allied Defense Consortium" in msg
+    assert "<b>Publisher:</b> Reuters | <b>Published:</b> 2026-10-17 16:45 UTC" in msg
+
+    # 5. Executive Summary
+    assert "<b>Executive Summary:</b>" in msg
+    assert "US Commerce Department granted expedited semiconductor export licensing to defense partners." in msg
+
+    # 6. Causal Mechanism
+    assert "<b>Causal Mechanism:</b>" in msg
+    assert "Eliminates 6-9 month export review cycle, accelerating booked backlog recognition and gross margins." in msg
+
+    # 7. Beneficiaries vs Negatively Exposed
+    assert "🟢 <b>Beneficiaries:</b> $NVDA, $AVGO" in msg
+    assert "🔴 <b>Negatively Exposed:</b> $INTC" in msg
+
+    # 8. Counterarguments & Invalidation
+    assert "⚖️ <b>Counterarguments:</b> Legislative challenge in Congress could delay implementation window by 60 days." in msg
+    assert "🛑 <b>Invalidation Condition:</b> Federal register rule revocation or injunction issued by trade court." in msg
+
+    # 9. Direct URL Link
+    assert '<a href="https://reuters.com/business/semiconductors-allied-exemption">https://reuters.com/business/semiconductors-allied-exemption</a>' in msg
+
+    # 10. Mandatory Disclaimer at footer
+    assert "<i>⚠️ News-derived hypothesis. Market pricing, valuation, and entry points were not checked.</i>" in msg
 

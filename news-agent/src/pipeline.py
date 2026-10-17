@@ -2,7 +2,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Union
 
-from src.models import RawArticle, MarketImpactAnalysis, ImpactGrade
+from src.models import RawArticle, MarketImpactAnalysis, ImpactGrade, EventStatus
 from src.config import Settings, SourceConfig, load_settings, load_sources
 from src.ingestion.rss import fetch_all_sources
 from src.storage.base import BaseStorage
@@ -162,21 +162,66 @@ class Pipeline:
         )
 
     def should_alert(self, analysis: MarketImpactAnalysis) -> bool:
-        """Evaluate whether an analyzed article meets notification criteria."""
+        """Evaluate whether an analyzed article meets notification criteria.
+
+        Enforces the Institutional Hard Gate Decision Engine:
+        - Telegram notification is dispatched ONLY when:
+          * analysis.status == EventStatus.OPPORTUNITY_CANDIDATE
+          * (analysis.hard_gates is None or analysis.hard_gates.passes_all_gates)
+          * analysis.confidence_score >= min_confidence_score (or alert_on_all)
+          * analysis.impact_grade >= min_impact_grade (or alert_on_all)
+        - Non-qualifying events (WATCHLIST, INFORMATIONAL, UNVERIFIED, NO_ACTION,
+          or failed hard gates) are suppressed, recorded with alerted=False, and audited.
+        """
+        # 1. Hard Gate: Workflow Status
+        if analysis.status != EventStatus.OPPORTUNITY_CANDIDATE:
+            logger.info(
+                "Alert suppressed: status '%s' is not %s (audit reason: non-qualifying event status)",
+                analysis.status,
+                EventStatus.OPPORTUNITY_CANDIDATE,
+            )
+            return False
+
+        # 2. Hard Gate: Quality gating verification, novelty, and direct exposure
+        if analysis.hard_gates is not None and not analysis.hard_gates.passes_all_gates:
+            logger.info(
+                "Alert suppressed: hard gates failed [novel=%s, verified=%s, direct_exposure=%s] "
+                "(audit reason: quality gating criteria failed)",
+                analysis.hard_gates.is_novel,
+                analysis.hard_gates.is_verified,
+                analysis.hard_gates.has_direct_exposure,
+            )
+            return False
+
+        # 3. CLI Testing Override
         if self.alert_on_all:
             return True
 
+        # 4. Materiality / Market moving requirement
         if not analysis.is_market_moving:
+            logger.info("Alert suppressed: article evaluated as not market moving (audit reason: is_market_moving=False)")
             return False
 
+        # 5. Confidence score threshold
         if self.min_confidence_score is not None:
             if analysis.confidence_score < self.min_confidence_score:
+                logger.info(
+                    "Alert suppressed: confidence score %d < threshold %d (audit reason: below min_confidence_score)",
+                    analysis.confidence_score,
+                    self.min_confidence_score,
+                )
                 return False
 
+        # 6. Severity / impact grade threshold
         if self.min_impact_grade is not None:
             analysis_rank = GRADE_SEVERITY.get(analysis.impact_grade, 0)
             min_rank = GRADE_SEVERITY.get(self.min_impact_grade, 0)
             if analysis_rank < min_rank:
+                logger.info(
+                    "Alert suppressed: impact grade %s < threshold %s (audit reason: below min_impact_grade)",
+                    analysis.impact_grade,
+                    self.min_impact_grade,
+                )
                 return False
 
         return True
@@ -213,7 +258,7 @@ class Pipeline:
                 errors_count += 1
                 continue
 
-            # 3. Filtering & alert criteria
+            # 3. Filtering & alert criteria (enforcing Hard Gate Decision Engine)
             alert_warranted = self.should_alert(analysis)
             alert_delivered = False
 
@@ -231,6 +276,14 @@ class Pipeline:
 
                 if alert_delivered:
                     alerted_count += 1
+            else:
+                logger.info(
+                    "Article '%s' (%s) routed to storage without alert (status=%s, score=%d, alerted=False).",
+                    article.title,
+                    article.url,
+                    analysis.status,
+                    analysis.confidence_score,
+                )
 
             # 4. Storage persistence (non-alerted articles saved with alerted=False to prevent re-analysis)
             try:

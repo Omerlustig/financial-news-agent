@@ -1,7 +1,7 @@
 from unittest.mock import MagicMock, patch
 import pytest
 
-from src.models import RawArticle, MarketImpactAnalysis, ImpactGrade
+from src.models import RawArticle, MarketImpactAnalysis, ImpactGrade, EventStatus, HardGates
 from src.pipeline import Pipeline, CycleSummary
 from src.analysis.analyzer import AnalysisError
 from src.config import Settings, FilterSettings
@@ -538,6 +538,212 @@ def test_pipeline_run_cycle_enforces_batch_size_per_source():
         mock_fetch.assert_called_once()
         _, kwargs = mock_fetch.call_args
         assert kwargs.get("max_items_per_source") == 7
+
+
+def test_pipeline_hard_gates_watchlist_suppressed():
+    """Verify WATCHLIST status articles are stored with alerted=False and never alert Telegram."""
+    mock_storage = MagicMock()
+    mock_analyzer = MagicMock()
+    mock_notifier = MagicMock()
+
+    art = RawArticle(
+        title="Unconfirmed M&A Rumors",
+        url="https://test.com/rumor",
+        source_name="BlogNews",
+    )
+    mock_storage.filter_unseen.return_value = [art]
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=8,
+        impact_grade=ImpactGrade.HIGH,
+        status=EventStatus.WATCHLIST,
+        affected_tickers=["$M&A"],
+        affected_sectors=["Technology"],
+        summary="Rumors circulating regarding acquisition.",
+        catalyst_thesis="Potential valuation re-rating if true.",
+    )
+    mock_analyzer.analyze.return_value = analysis
+
+    pipeline = Pipeline(
+        storage=mock_storage,
+        analyzer=mock_analyzer,
+        notifier=mock_notifier,
+        min_score=6,
+    )
+    summary = pipeline.process_articles([art])
+
+    assert summary.analyzed == 1
+    assert summary.alerted == 0
+    mock_notifier.send_alert.assert_not_called()
+    mock_storage.record_article.assert_called_once_with(art, analysis, alerted=False)
+
+
+def test_pipeline_hard_gates_unverified_suppressed():
+    """Verify UNVERIFIED status articles are stored with alerted=False and never alert Telegram."""
+    mock_storage = MagicMock()
+    mock_analyzer = MagicMock()
+    mock_notifier = MagicMock()
+
+    art = RawArticle(
+        title="Unverified Rumor on Social Media",
+        url="https://test.com/unverified",
+        source_name="Twitter",
+    )
+    mock_storage.filter_unseen.return_value = [art]
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=9,
+        impact_grade=ImpactGrade.CRITICAL,
+        status=EventStatus.UNVERIFIED,
+        affected_tickers=["$SPEC"],
+        affected_sectors=["Energy"],
+        summary="Speculative leak without primary documentation.",
+        catalyst_thesis="Hypothetical supply drop.",
+    )
+    mock_analyzer.analyze.return_value = analysis
+
+    pipeline = Pipeline(
+        storage=mock_storage,
+        analyzer=mock_analyzer,
+        notifier=mock_notifier,
+        min_score=6,
+    )
+    summary = pipeline.process_articles([art])
+
+    assert summary.analyzed == 1
+    assert summary.alerted == 0
+    mock_notifier.send_alert.assert_not_called()
+    mock_storage.record_article.assert_called_once_with(art, analysis, alerted=False)
+
+
+def test_pipeline_hard_gates_informational_and_no_action_suppressed():
+    """Verify INFORMATIONAL and NO_ACTION statuses are suppressed from Telegram alerting."""
+    mock_storage = MagicMock()
+    mock_analyzer = MagicMock()
+    mock_notifier = MagicMock()
+
+    art1 = RawArticle(title="Routine Filing", url="https://test.com/info", source_name="SEC")
+    art2 = RawArticle(title="Irrelevant Opinion", url="https://test.com/noaction", source_name="Opinion")
+    mock_storage.filter_unseen.return_value = [art1, art2]
+
+    analysis1 = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=8,
+        impact_grade=ImpactGrade.HIGH,
+        status=EventStatus.INFORMATIONAL,
+        summary="Routine 10-Q filing.",
+        catalyst_thesis="Baseline filings info.",
+    )
+    analysis2 = MarketImpactAnalysis(
+        is_market_moving=False,
+        confidence_score=7,
+        impact_grade=ImpactGrade.AVERAGE,
+        status=EventStatus.NO_ACTION,
+        summary="Opinion piece without actionable facts.",
+        catalyst_thesis="No impact.",
+    )
+    mock_analyzer.analyze.side_effect = [analysis1, analysis2]
+
+    pipeline = Pipeline(
+        storage=mock_storage,
+        analyzer=mock_analyzer,
+        notifier=mock_notifier,
+        min_score=6,
+    )
+    summary = pipeline.process_articles([art1, art2])
+
+    assert summary.analyzed == 2
+    assert summary.alerted == 0
+    mock_notifier.send_alert.assert_not_called()
+    assert mock_storage.record_article.call_count == 2
+    mock_storage.record_article.assert_any_call(art1, analysis1, alerted=False)
+    mock_storage.record_article.assert_any_call(art2, analysis2, alerted=False)
+
+
+def test_pipeline_hard_gates_failure_blocks_even_with_alert_on_all():
+    """Verify that failed hard-gates block alerts even if alert_on_all CLI flag is enabled."""
+    mock_storage = MagicMock()
+    mock_analyzer = MagicMock()
+    mock_notifier = MagicMock()
+
+    art = RawArticle(title="Indirect Exposure", url="https://test.com/indirect", source_name="Reuters")
+    mock_storage.filter_unseen.return_value = [art]
+
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=10,
+        impact_grade=ImpactGrade.CRITICAL,
+        status=EventStatus.OPPORTUNITY_CANDIDATE,
+        summary="Tenuous connection.",
+        catalyst_thesis="Third order speculation.",
+        hard_gates=HardGates(
+            is_novel=True,
+            is_verified=True,
+            has_direct_exposure=False,  # Failed gate!
+        ),
+    )
+    mock_analyzer.analyze.return_value = analysis
+
+    pipeline = Pipeline(
+        storage=mock_storage,
+        analyzer=mock_analyzer,
+        notifier=mock_notifier,
+        alert_on_all=True,  # Even with CLI override
+    )
+    summary = pipeline.process_articles([art])
+
+    assert summary.analyzed == 1
+    assert summary.alerted == 0
+    mock_notifier.send_alert.assert_not_called()
+    mock_storage.record_article.assert_called_once_with(art, analysis, alerted=False)
+
+
+def test_pipeline_opportunity_candidate_with_passing_hard_gates_alerts():
+    """Verify OPPORTUNITY_CANDIDATE with passing hard gates and qualifying score triggers alert."""
+    mock_storage = MagicMock()
+    mock_analyzer = MagicMock()
+    mock_notifier = MagicMock()
+    mock_notifier.send_alert.return_value = True
+
+    art = RawArticle(
+        title="Department of Defense Awards $5B Drone Contract",
+        url="https://defense.gov/drone-contract",
+        source_name="DoD",
+    )
+    mock_storage.filter_unseen.return_value = [art]
+
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=9,
+        impact_grade=ImpactGrade.CRITICAL,
+        status=EventStatus.OPPORTUNITY_CANDIDATE,
+        affected_tickers=["$KTOS", "$AVAV"],
+        affected_sectors=["Defense"],
+        summary="DoD finalized $5B production contract for autonomous loitering munitions.",
+        catalyst_thesis="Immediate revenue recognition and substantial order backlog expansion.",
+        hard_gates=HardGates(
+            is_novel=True,
+            is_verified=True,
+            has_direct_exposure=True,
+            passes_all_gates=True,
+        ),
+    )
+    mock_analyzer.analyze.return_value = analysis
+
+    pipeline = Pipeline(
+        storage=mock_storage,
+        analyzer=mock_analyzer,
+        notifier=mock_notifier,
+        min_score=7,
+        min_impact_grade=ImpactGrade.HIGH,
+    )
+    summary = pipeline.process_articles([art])
+
+    assert summary.analyzed == 1
+    assert summary.alerted == 1
+    mock_notifier.send_alert.assert_called_once_with(art, analysis)
+    mock_storage.record_article.assert_called_once_with(art, analysis, alerted=True)
+
 
 
 
