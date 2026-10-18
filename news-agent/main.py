@@ -88,17 +88,22 @@ def run_agent_scan() -> Dict[str, Any]:
     sources = load_sources()
 
     # 3. Execute cycle
+    import time
+    start_time = time.time()
     with Pipeline(settings, sources) as pipeline:
         summary = pipeline.run_cycle()
+    duration_seconds = round(time.time() - start_time, 2)
 
     # 4. Sync persistent SQLite DB back to Firebase Storage
     sync_db_to_cloud_storage(local_db_path, bucket_name)
 
     return {
         "fetched": summary.fetched,
+        "new_unseen": summary.new_unseen,
         "analyzed": summary.analyzed,
         "alerted": summary.alerted,
-        "duration_seconds": summary.duration_seconds,
+        "errors": summary.errors,
+        "duration_seconds": duration_seconds,
     }
 
 

@@ -66,7 +66,7 @@ def test_run_agent_scan(tmp_path):
              patch("src.pipeline.Pipeline") as mock_pipeline_cls:
 
             mock_pipeline = MagicMock()
-            mock_summary = MagicMock(fetched=5, analyzed=3, alerted=1, duration_seconds=2.5)
+            mock_summary = MagicMock(fetched=5, new_unseen=4, analyzed=3, alerted=1, errors=0)
             mock_pipeline.run_cycle.return_value = mock_summary
             mock_pipeline.__enter__.return_value = mock_pipeline
             mock_pipeline_cls.return_value = mock_pipeline
@@ -74,8 +74,10 @@ def test_run_agent_scan(tmp_path):
             result = main.run_agent_scan()
 
             assert result["fetched"] == 5
+            assert result["new_unseen"] == 4
             assert result["analyzed"] == 3
             assert result["alerted"] == 1
-            assert result["duration_seconds"] == 2.5
+            assert result["errors"] == 0
+            assert "duration_seconds" in result
             mock_sync_from.assert_called_once()
             mock_sync_to.assert_called_once()
