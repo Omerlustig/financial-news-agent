@@ -1244,6 +1244,78 @@ def test_pipeline_watchlist_disabled_no_boost():
     assert summary.alerted == 0
 
 
+def test_pipeline_skips_storage_and_cache_for_unanalyzed_articles(tmp_path):
+    """Verify that unanalyzed articles (rate limited or fallback) are NOT persisted to DB or cache, allowing retry in next cycle."""
+    from src.storage.sqlite import SQLiteStorage
+    db_path = str(tmp_path / "test_retry.db")
+    real_storage = SQLiteStorage(db_path)
+
+    art = RawArticle(
+        title="Breaking Semiconductor Export Ban",
+        url="https://reuters.com/export-ban",
+        source_name="Reuters",
+    )
+
+    # 1. Initially unseen
+    assert len(real_storage.filter_unseen([art])) == 1
+
+    # 2. Mock analyzer returns fallback analysis with is_llm_analyzed = False
+    mock_analyzer = MagicMock()
+    fallback_analysis = MarketImpactAnalysis(
+        is_llm_analyzed=False,
+        is_market_moving=False,
+        confidence_score=1,
+        impact_grade=ImpactGrade.LOW,
+        summary=art.title,
+        catalyst_thesis="Fallback due to 429 rate limit",
+        status=EventStatus.NO_ACTION,
+    )
+    mock_analyzer.analyze.return_value = fallback_analysis
+
+    mock_notifier = MagicMock()
+    pipeline = Pipeline(
+        storage=real_storage,
+        analyzer=mock_analyzer,
+        notifier=mock_notifier,
+    )
+
+    # Run pipeline cycle
+    summary = pipeline.process_articles([art])
+
+    # Article was skipped from storage persistence
+    assert summary.analyzed == 0
+    assert summary.alerted == 0
+    mock_notifier.send_alert.assert_not_called()
+
+    # Verify article is STILL unseen in DB/cache! (Will be retried next cycle)
+    still_unseen = real_storage.filter_unseen([art])
+    assert len(still_unseen) == 1
+    assert still_unseen[0].url == art.url
+
+    # 3. Next cycle: rate limits reset, analysis succeeds with is_llm_analyzed = True
+    success_analysis = MarketImpactAnalysis(
+        is_llm_analyzed=True,
+        is_market_moving=True,
+        confidence_score=9,
+        impact_grade=ImpactGrade.CRITICAL,
+        affected_tickers=["$NVDA"],
+        summary="Ban confirmed.",
+        catalyst_thesis="Severe margin impact.",
+        status=EventStatus.OPPORTUNITY_CANDIDATE,
+        hard_gates=HardGates(is_novel=True, is_verified=True, has_direct_exposure=True),
+    )
+    mock_analyzer.analyze.return_value = success_analysis
+    mock_notifier.send_alert.return_value = True
+
+    summary2 = pipeline.process_articles([art])
+    assert summary2.analyzed == 1
+    assert summary2.alerted == 1
+
+    # Now it is properly persisted in SQLite and filtered out in subsequent cycles
+    assert len(real_storage.filter_unseen([art])) == 0
+
+
+
 
 
 

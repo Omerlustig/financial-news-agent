@@ -57,13 +57,46 @@ class FilterSettings(BaseModel):
         return v
 
 
+def _normalize_model_name(v: Any) -> Any:
+    if not v or not isinstance(v, str):
+        return v
+    cleaned = v.strip()
+    if not cleaned:
+        return cleaned
+    if " " in cleaned:
+        cleaned = cleaned.lower().replace(" ", "-")
+    if not cleaned.startswith("gemini/") and "gemini" in cleaned.lower():
+        cleaned = f"gemini/{cleaned.lower()}"
+    return cleaned
+
+
 class LLMSettings(BaseModel):
-    model: str = Field(default="gemini/gemini-1.5-flash", description="LiteLLM model identifier.")
-    fallback_model: Optional[str] = Field(default="gpt-4o-mini", description="Fallback LiteLLM model identifier.")
+    model: str = Field(default="gemini/gemini-3.8-flash", description="LiteLLM model identifier.")
+    fallback_model: Optional[str] = Field(default="gemini/gemini-3.7-flash", description="Primary fallback LiteLLM model identifier.")
+    fallback_models: List[str] = Field(
+        default_factory=lambda: ["gemini/gemini-3.7-flash", "gemini/gemini-3.6-flash"],
+        description="Ordered list of fallback models on rate limit or failure."
+    )
     enable_cache: bool = Field(default=True, description="Enable local response caching.")
     monthly_budget_usd: Optional[float] = Field(default=10.0, description="Monthly budget limit in USD.")
     temperature: float = Field(default=0.1, description="Sampling temperature for deterministic analysis.")
     max_retries: int = Field(default=3, description="Maximum API retries upon rate limit or transient errors.")
+    backoff_delay: float = Field(default=2.0, description="Initial retry backoff delay in seconds.")
+    backoff_factor: float = Field(default=2.0, description="Exponential backoff factor.")
+
+    @field_validator("model", "fallback_model", mode="before")
+    @classmethod
+    def normalize_model(cls, v: Any) -> Any:
+        return _normalize_model_name(v)
+
+    @field_validator("fallback_models", mode="before")
+    @classmethod
+    def normalize_fallback_models(cls, v: Any) -> List[str]:
+        if not v:
+            return []
+        if isinstance(v, str):
+            v = [m.strip() for m in v.split(",") if m.strip()]
+        return [_normalize_model_name(m) for m in v if m]
 
 
 class TelegramSettings(BaseModel):

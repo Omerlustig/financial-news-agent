@@ -14,11 +14,16 @@ filter:
 
 llm:
   model: "gemini/gemini-3.8-flash"
-  fallback_model: "gpt-4o-mini" # Secondary fallback model on primary provider failure
+  fallback_model: "gemini/gemini-3.7-flash" # Primary fallback model on rate limit or failure
+  fallback_models:
+    - "gemini/gemini-3.7-flash"
+    - "gemini/gemini-3.6-flash"
   enable_cache: true # Enable LiteLLM response caching
   monthly_budget_usd: 10.0 # Monthly LLM spending cap in USD
   temperature: 0.1
   max_retries: 3
+  backoff_delay: 2.0 # Initial backoff delay in seconds on 429
+  backoff_factor: 2.0 # Exponential backoff multiplier
 
 telegram:
   bot_token: "${TELEGRAM_BOT_TOKEN}"

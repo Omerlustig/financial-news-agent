@@ -828,11 +828,11 @@ def test_analyzer_failover_on_primary_model_failure():
         ]
 
 
-def test_analyzer_immediate_failover_on_429_rate_limit():
-    """Verify immediate failover to fallback model upon encountering HTTP 429 rate limit."""
+def test_analyzer_backoff_and_retry_on_429_before_failover():
+    """Verify backoff and retry on HTTP 429 rate limit before failing over to fallback model."""
     analyzer = MarketImpactAnalyzer(
-        model="gemini/gemini-1.5-flash",
-        fallback_model="gpt-4o-mini",
+        model="gemini/gemini-3.8-flash",
+        fallback_model="gemini/gemini-3.7-flash",
         max_retries=3,
     )
     article = RawArticle(
@@ -848,7 +848,7 @@ def test_analyzer_immediate_failover_on_429_rate_limit():
 
     def mock_completion(model, **kwargs):
         models_called.append(model)
-        if model == "gemini/gemini-1.5-flash":
+        if model == "gemini/gemini-3.8-flash":
             raise RateLimitError("Rate limit exceeded (429: Too Many Requests)")
         return {
             "choices": [{"message": {"content": MOCK_LLM_JSON}}],
@@ -857,13 +857,90 @@ def test_analyzer_immediate_failover_on_429_rate_limit():
 
     with patch("litellm.completion", side_effect=mock_completion), \
          patch("litellm.completion_cost", return_value=0.00005), \
+         patch("time.sleep") as mock_sleep:
+        result = analyzer.analyze(article)
+
+        assert result.token_usage is not None
+        assert result.token_usage.model_name == "gemini/gemini-3.7-flash"
+        assert result.is_llm_analyzed is True
+        # Primary called max_retries (3) times with backoff before failing over to fallback
+        assert models_called == [
+            "gemini/gemini-3.8-flash",
+            "gemini/gemini-3.8-flash",
+            "gemini/gemini-3.8-flash",
+            "gemini/gemini-3.7-flash",
+        ]
+        assert mock_sleep.call_count >= 2
+
+
+def test_analyzer_multi_tier_gemini_fallback_chain():
+    """Verify Gemini 3.8 Flash -> Gemini 3.7 Flash -> Gemini 3.6 Flash fallback chain."""
+    analyzer = MarketImpactAnalyzer(
+        model="gemini/gemini-3.8-flash",
+        fallback_models=["gemini/gemini-3.7-flash", "gemini/gemini-3.6-flash"],
+        max_retries=2,
+    )
+    article = RawArticle(
+        title="Breaking Tech Catalyst",
+        url="https://example.com/tech",
+        source_name="Reuters",
+    )
+
+    models_called = []
+
+    class RateLimitError(Exception):
+        status_code = 429
+
+    def mock_completion(model, **kwargs):
+        models_called.append(model)
+        # Fail 3.8 and 3.7 with 429, succeed on 3.6
+        if model in ("gemini/gemini-3.8-flash", "gemini/gemini-3.7-flash"):
+            raise RateLimitError("Rate limit exceeded (429: Resource Exhausted)")
+        return {
+            "choices": [{"message": {"content": MOCK_LLM_JSON}}],
+            "usage": {"prompt_tokens": 180, "completion_tokens": 40, "total_tokens": 220},
+        }
+
+    with patch("litellm.completion", side_effect=mock_completion), \
+         patch("litellm.completion_cost", return_value=0.00003), \
          patch("time.sleep"):
         result = analyzer.analyze(article)
 
         assert result.token_usage is not None
-        assert result.token_usage.model_name == "gpt-4o-mini"
-        # Primary called only once because 429 triggered immediate failover
-        assert models_called == ["gemini/gemini-1.5-flash", "gpt-4o-mini"]
+        assert result.token_usage.model_name == "gemini/gemini-3.6-flash"
+        assert result.is_llm_analyzed is True
+        # 2 attempts on 3.8, 2 attempts on 3.7, then success on 3.6
+        assert models_called == [
+            "gemini/gemini-3.8-flash",
+            "gemini/gemini-3.8-flash",
+            "gemini/gemini-3.7-flash",
+            "gemini/gemini-3.7-flash",
+            "gemini/gemini-3.6-flash",
+        ]
+
+
+def test_analyzer_all_models_rate_limited_returns_unconfirmed_fallback():
+    """Verify that when all models fail rate limits, fallback has is_llm_analyzed=False."""
+    analyzer = MarketImpactAnalyzer(
+        model="gemini/gemini-3.8-flash",
+        fallback_models=["gemini/gemini-3.7-flash", "gemini/gemini-3.6-flash"],
+        fallback_on_error=True,
+        max_retries=1,
+    )
+    article = RawArticle(
+        title="Unanalyzed Article Under High Load",
+        url="https://example.com/load",
+        source_name="Bloomberg",
+    )
+
+    class RateLimitError(Exception):
+        status_code = 429
+
+    with patch("litellm.completion", side_effect=RateLimitError("429 Rate limited")), \
+         patch("time.sleep"):
+        result = analyzer.analyze(article)
+        assert result.is_llm_analyzed is False
+        assert result.status == EventStatus.NO_ACTION
 
 
 def test_prompt_construction_inflection_reversal_and_sector_spillovers():

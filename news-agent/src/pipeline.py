@@ -344,7 +344,6 @@ class Pipeline:
             canonical = cluster.canonical_article
             try:
                 analysis = self.analyzer.analyze(canonical)
-                analyzed_count += 1
             except Exception as exc:
                 logger.error(
                     "Error analyzing article '%s' (%s): %s",
@@ -355,6 +354,18 @@ class Pipeline:
                 )
                 errors_count += 1
                 continue
+
+            # If article was not analyzed by LLM (rate limit exhausted or credentials unavailable),
+            # do not persist to DB/cache so it will be retried in the next polling cycle.
+            if not getattr(analysis, "is_llm_analyzed", True):
+                logger.warning(
+                    "Article '%s' (%s) was not analyzed by LLM (rate-limited / error); skipping storage persistence so it will be retried in the next cycle.",
+                    canonical.title,
+                    canonical.url,
+                )
+                continue
+
+            analyzed_count += 1
 
             # Apply multi-source corroboration weights, validation boost & source tracking
             analysis = self.corroborator.corroborate_analysis(analysis, cluster)

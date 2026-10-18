@@ -72,13 +72,14 @@ class MarketImpactAnalyzer:
 
     def __init__(
         self,
-        model: Union[str, LLMSettings] = "gemini/gemini-1.5-flash",
+        model: Union[str, LLMSettings] = "gemini/gemini-3.8-flash",
         temperature: float = 0.1,
         max_retries: int = 3,
-        retry_delay: float = 1.0,
+        retry_delay: float = 2.0,
         backoff_factor: float = 2.0,
         fallback_on_error: bool = False,
         fallback_model: Optional[str] = None,
+        fallback_models: Optional[List[str]] = None,
         storage: Optional[BaseStorage] = None,
         llm_settings: Optional[LLMSettings] = None,
         watchlist_settings: Optional[WatchlistSettings] = None,
@@ -90,22 +91,29 @@ class MarketImpactAnalyzer:
         if llm_settings is not None:
             self.model = llm_settings.model
             self.fallback_model = fallback_model or llm_settings.fallback_model
+            self.fallback_models = fallback_models or getattr(llm_settings, "fallback_models", [])
             self.temperature = llm_settings.temperature
             self.max_retries = llm_settings.max_retries
+            self.retry_delay = getattr(llm_settings, "backoff_delay", retry_delay)
+            self.backoff_factor = getattr(llm_settings, "backoff_factor", backoff_factor)
         elif isinstance(model, LLMSettings):
             self.llm_settings = model
             self.model = model.model
             self.fallback_model = fallback_model or model.fallback_model
+            self.fallback_models = fallback_models or getattr(model, "fallback_models", [])
             self.temperature = model.temperature
             self.max_retries = model.max_retries
+            self.retry_delay = getattr(model, "backoff_delay", retry_delay)
+            self.backoff_factor = getattr(model, "backoff_factor", backoff_factor)
         else:
             self.model = model
             self.fallback_model = fallback_model
+            self.fallback_models = fallback_models or []
             self.temperature = temperature
             self.max_retries = max_retries
+            self.retry_delay = retry_delay
+            self.backoff_factor = backoff_factor
 
-        self.retry_delay = retry_delay
-        self.backoff_factor = backoff_factor
         self.fallback_on_error = fallback_on_error
         self.sentiment_engine = FinancialSentimentEngine()
         self.quota_exhausted = False
@@ -117,7 +125,7 @@ class MarketImpactAnalyzer:
         watchlist_tickers: Optional[List[str]] = None,
         watchlist_sectors: Optional[List[str]] = None,
     ) -> MarketImpactAnalysis:
-        """Analyzes an article using litellm with failover to fallback_model and exponential backoff retries."""
+        """Analyzes an article using litellm with failover across candidate models and exponential backoff retries."""
         effective_wl_tickers = watchlist_tickers
         if effective_wl_tickers is None and self.watchlist_settings and self.watchlist_settings.enabled:
             effective_wl_tickers = self.watchlist_settings.tickers
@@ -144,9 +152,16 @@ class MarketImpactAnalyzer:
             {"role": "user", "content": user_prompt},
         ]
 
-        candidate_models = [self.model]
-        if self.fallback_model and self.fallback_model != self.model:
-            candidate_models.append(self.fallback_model)
+        models_to_check = [self.model]
+        if self.fallback_models:
+            models_to_check.extend(self.fallback_models)
+        elif self.fallback_model:
+            models_to_check.append(self.fallback_model)
+
+        candidate_models: List[str] = []
+        for m in models_to_check:
+            if m and m not in candidate_models:
+                candidate_models.append(m)
 
         last_error: Optional[Exception] = None
 
@@ -265,17 +280,20 @@ class MarketImpactAnalyzer:
                             watchlist_sectors=effective_wl_sectors,
                         )
 
-                    # Immediate failover upon 429 rate limit, 503 high demand spike, or missing/invalid API key
-                    if has_fallback_remaining and (is_rate_limit or is_high_demand):
-                        next_model = candidate_models[model_idx + 1]
-                        logger.warning(
-                            "Model '%s' encountered %s; failing over immediately to fallback model '%s'",
-                            target_model,
-                            "high demand (503)" if is_high_demand else "rate limit (429)",
-                            next_model,
+                    # 1. Quota exhausted across all fallbacks
+                    if is_quota_error and not has_fallback_remaining and attempt >= self.max_retries:
+                        self.quota_exhausted = True
+                        logger.info(
+                            "Daily API quota reached across models. Seamlessly using high-precision financial rules engine for catalyst scoring.",
                         )
-                        break
+                        return self._build_fallback(
+                            article,
+                            f"Daily quota reached for {target_model}",
+                            watchlist_tickers=effective_wl_tickers,
+                            watchlist_sectors=effective_wl_sectors,
+                        )
 
+                    # 2. Auth error: retrying same credentials won't help, failover immediately if fallback available
                     if is_auth_error:
                         if has_fallback_remaining:
                             next_model = candidate_models[model_idx + 1]
@@ -287,7 +305,7 @@ class MarketImpactAnalyzer:
                             break
                         else:
                             logger.info(
-                                "Model '%s' credentials unavailable. Using deterministic financial engine for catalyst analysis.",
+                                "Model '%s' credentials unavailable and no fallback remaining. Using deterministic financial engine for catalyst analysis.",
                                 target_model,
                             )
                             return self._build_fallback(
@@ -297,30 +315,72 @@ class MarketImpactAnalyzer:
                                 watchlist_sectors=effective_wl_sectors,
                             )
 
+                    # 3. Rate limit (429) or high demand (503): backoff and retry first!
+                    if is_rate_limit or is_high_demand:
+                        if attempt < self.max_retries:
+                            sleep_time = max(current_delay, 2.0 * attempt)
+                            retry_after = getattr(e, "retry_after", None)
+                            if retry_after is not None:
+                                try:
+                                    sleep_time = max(sleep_time, float(retry_after))
+                                except Exception:
+                                    pass
+                            logger.warning(
+                                "Model '%s' encountered %s (attempt %d/%d); backing off for %.1fs before retry",
+                                target_model,
+                                "high demand (503)" if is_high_demand else "rate limit (429)",
+                                attempt,
+                                self.max_retries,
+                                sleep_time,
+                            )
+                            time.sleep(sleep_time)
+                            current_delay *= self.backoff_factor
+                            continue
+                        else:
+                            # Retries exhausted on this model
+                            if has_fallback_remaining:
+                                next_model = candidate_models[model_idx + 1]
+                                logger.warning(
+                                    "Model '%s' exhausted all %d attempts (%s); failing over to fallback model '%s'",
+                                    target_model,
+                                    self.max_retries,
+                                    "high demand (503)" if is_high_demand else "rate limit (429)",
+                                    next_model,
+                                )
+                                break
+                            else:
+                                logger.warning(
+                                    "Model '%s' exhausted all %d attempts (%s) and no further fallback models remain.",
+                                    target_model,
+                                    self.max_retries,
+                                    "high demand (503)" if is_high_demand else "rate limit (429)",
+                                )
+                                break
+
+                    # 4. Other exceptions (parse error, network drop, etc.)
                     logger.warning(
-                        "LLM analysis attempt %d/%d on model '%s' failed (%s): %s",
+                        "LLM analysis attempt %d/%d on model '%s' failed: %s",
                         attempt,
                         self.max_retries,
                         target_model,
-                        "rate limit 429" if is_rate_limit else ("high demand 503" if is_high_demand else "API or parse error"),
                         e,
                     )
-
                     if attempt < self.max_retries:
                         time.sleep(current_delay)
                         current_delay *= self.backoff_factor
-
-            # Failover after exhausting retries on current model
-            if has_fallback_remaining:
-                next_model = candidate_models[model_idx + 1]
-                logger.warning(
-                    "Model '%s' failed all attempts; failing over to fallback model '%s'",
-                    target_model,
-                    next_model,
-                )
+                        continue
+                    elif has_fallback_remaining:
+                        next_model = candidate_models[model_idx + 1]
+                        logger.warning(
+                            "Model '%s' failed all %d attempts; failing over to fallback model '%s'",
+                            target_model,
+                            self.max_retries,
+                            next_model,
+                        )
+                        break
 
         # All models and retries failed
-        error_msg = f"LLM analysis failed after {self.max_retries} retries (unparseable JSON or API error): {last_error}"
+        error_msg = f"LLM analysis failed after {self.max_retries} retries across models (unparseable JSON or API error): {last_error}"
         logger.error(error_msg)
         if self.fallback_on_error:
             return self._build_fallback(
@@ -485,6 +545,7 @@ class MarketImpactAnalyzer:
                 filing_item = f"MAYA: {maya_cat}"
 
         return MarketImpactAnalysis(
+            is_llm_analyzed=False,
             is_market_moving=False,
             confidence_score=1,
             impact_grade=ImpactGrade.LOW,

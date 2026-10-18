@@ -145,8 +145,10 @@ def test_agent_settings_etag_cache():
 def test_llm_settings_upgrades():
     # Test default values
     llm = LLMSettings()
-    assert llm.model == "gemini/gemini-1.5-flash"
-    assert llm.fallback_model == "gpt-4o-mini"
+    assert llm.model == "gemini/gemini-3.8-flash"
+    assert llm.fallback_model == "gemini/gemini-3.7-flash"
+    assert "gemini/gemini-3.7-flash" in llm.fallback_models
+    assert "gemini/gemini-3.6-flash" in llm.fallback_models
     assert llm.enable_cache is True
     assert llm.monthly_budget_usd == 10.0
 
@@ -213,7 +215,8 @@ def test_load_actual_settings_yaml():
     assert isinstance(settings.filter.min_impact_grade, ImpactGrade)
     assert settings.filter.min_impact_grade == ImpactGrade.HIGH
     assert settings.llm.model == "gemini/gemini-3.8-flash"
-    assert settings.llm.fallback_model == "gpt-4o-mini"
+    assert settings.llm.fallback_model == "gemini/gemini-3.7-flash"
+    assert settings.llm.fallback_models == ["gemini/gemini-3.7-flash", "gemini/gemini-3.6-flash"]
     assert settings.llm.enable_cache is True
     assert settings.llm.monthly_budget_usd == 10.0
     # Unset telegram env vars should resolve to None rather than empty string
