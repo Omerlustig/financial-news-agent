@@ -267,27 +267,6 @@ def format_telegram_message(
                 f"⚡ <b>Acceleration:</b> {analysis.trend.sentiment_acceleration:+.2f} ({escape_html(verdict_val)})"
             )
 
-    # Executive Summary
-
-    summary = analysis.summary
-    if not summary and analysis.causal_chain and analysis.causal_chain.event_facts:
-        summary = analysis.causal_chain.event_facts
-    summary_text = summary if summary else "None"
-    lines.append("")
-    lines.append("<b>Executive Summary:</b>")
-    lines.append(escape_html(summary_text))
-
-    # Causal Mechanism
-    if analysis.causal_chain and analysis.causal_chain.economic_mechanism:
-        mechanism = analysis.causal_chain.economic_mechanism
-    elif analysis.catalyst_thesis:
-        mechanism = analysis.catalyst_thesis
-    else:
-        mechanism = "None"
-    lines.append("")
-    lines.append("<b>Causal Mechanism:</b>")
-    lines.append(escape_html(mechanism))
-
     # Beneficiaries vs Negatively Exposed
     if analysis.causal_chain:
         beneficiaries = analysis.causal_chain.beneficiaries
@@ -314,9 +293,18 @@ def format_telegram_message(
     else:
         negatively_exposed_str = "None"
 
-    lines.append("")
-    lines.append(f"🟢 <b>Beneficiaries:</b> {escape_html(beneficiaries_str)}")
-    lines.append(f"🔴 <b>Negatively Exposed:</b> {escape_html(negatively_exposed_str)}")
+    # Executive Summary & Mechanism text
+    summary = analysis.summary
+    if not summary and analysis.causal_chain and analysis.causal_chain.event_facts:
+        summary = analysis.causal_chain.event_facts
+    summary_text = summary if summary else "None"
+
+    if analysis.causal_chain and analysis.causal_chain.economic_mechanism:
+        mechanism = analysis.causal_chain.economic_mechanism
+    elif analysis.catalyst_thesis:
+        mechanism = analysis.catalyst_thesis
+    else:
+        mechanism = "None"
 
     # Recommendation / Actionable Takeaway
     rec = getattr(analysis, "recommendation", None)
@@ -331,6 +319,40 @@ def format_telegram_message(
             rec = f"Exercise caution or evaluate hedge protection on {', '.join(negatively_exposed)}."
         else:
             rec = "Track subsequent corporate disclosures and primary filings for tradeable volume confirmation."
+
+    # OVERALL BOTTOM LINE (Full Message Summarization at a glance)
+    lines.append("")
+    lines.append("🏁 <b>OVERALL BOTTOM LINE:</b>")
+    lines.append(f"• <b>Event:</b> {escape_html(summary_text)}")
+    if mechanism and mechanism != "None" and mechanism != summary_text:
+        lines.append(f"• <b>Mechanism:</b> {escape_html(mechanism)}")
+
+    action_summary_items = []
+    if beneficiaries and beneficiaries != ["None"]:
+        action_summary_items.append(f"🟢 Favor: {', '.join(beneficiaries)}")
+    if negatively_exposed and negatively_exposed != ["None"]:
+        action_summary_items.append(f"🔴 Avoid: {', '.join(negatively_exposed)}")
+    if not action_summary_items and sectors and sectors != ["None"]:
+        action_summary_items.append(f"🏭 In Play: {sectors_str}")
+    if action_summary_items:
+        lines.append(f"• <b>Action:</b> {escape_html(' | '.join(action_summary_items))}")
+
+    lines.append(f"• <b>Takeaway:</b> {escape_html(rec)}")
+
+    # Executive Summary (Detailed Facts)
+    lines.append("")
+    lines.append("<b>Executive Summary:</b>")
+    lines.append(escape_html(summary_text))
+
+    # Causal Mechanism
+    lines.append("")
+    lines.append("<b>Causal Mechanism:</b>")
+    lines.append(escape_html(mechanism))
+
+    # Beneficiaries vs Negatively Exposed
+    lines.append("")
+    lines.append(f"🟢 <b>Beneficiaries:</b> {escape_html(beneficiaries_str)}")
+    lines.append(f"🔴 <b>Negatively Exposed:</b> {escape_html(negatively_exposed_str)}")
 
     # Final Conclusion Brief regarding this push
     actionable_summary_parts: List[str] = []

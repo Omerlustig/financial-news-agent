@@ -474,6 +474,7 @@ def test_telegram_message_formatting_institutional_causal_chain():
     assert "🔴 <b>Negatively Exposed:</b> $INTC" in msg
 
     # Recommendation & Final Conclusion Brief
+    assert "🏁 <b>OVERALL BOTTOM LINE:</b>" in msg
     assert "💡 <b>Recommendation:</b>" in msg
     assert "🎯 <b>FINAL CONCLUSION & BOTTOM LINE:</b>" in msg
     assert "Actionable Positioning:" in msg
