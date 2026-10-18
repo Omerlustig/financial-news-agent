@@ -161,6 +161,31 @@ sources:
     url: "https://news.google.com/rss/search?q=site:calcalistech.com+when:7d&hl=en-US&gl=US&ceid=US:en"
     enabled: true
 
+  - name: "ICE Finance"
+    type: "rss"
+    url: "https://www.ice.co.il/rss"
+    enabled: true
+
+  - name: "Sponser Capital Markets"
+    type: "rss"
+    url: "https://news.google.com/rss/search?q=site:sponser.co.il+when:7d&hl=he&gl=IL&ceid=IL:he"
+    enabled: true
+
+  - name: "Jerusalem Post Business"
+    type: "rss"
+    url: "https://www.jpost.com/rss/rssbusinessandinnovation"
+    enabled: true
+
+  - name: "N12 Money"
+    type: "rss"
+    url: "https://news.google.com/rss/search?q=site:mako.co.il/news-money+when:7d&hl=he&gl=IL&ceid=IL:he"
+    enabled: true
+
+  - name: "Globes Finance Node 2"
+    type: "rss"
+    url: "https://www.globes.co.il/webservice/rss/rssfeeder.asmx/FeederNode?iID=2"
+    enabled: true
+
   # Google Alerts (Custom Real-Time Keyword Alerts)
   # How to use:
   # 1. Go to https://www.google.com/alerts
