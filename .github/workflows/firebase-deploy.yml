@@ -52,6 +52,20 @@ jobs:
         with:
           credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
 
+      - name: Create Production Environment Configuration
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          cat << EOF > news-agent/.env
+          TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+          TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+          GEMINI_API_KEY=${GEMINI_API_KEY}
+          DATABASE_PATH=/tmp/agent.db
+          LOG_LEVEL=INFO
+          EOF
+
       - name: Deploy to Firebase Functions
         env:
           PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}

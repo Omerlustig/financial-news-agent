@@ -113,7 +113,6 @@ if _FIREBASE_AVAILABLE:
         schedule="every 15 minutes",
         timeout_sec=300,
         memory=options.MemoryOption.MB_512,
-        secrets=["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "GEMINI_API_KEY"],
     )
     def scan_financial_news(event: scheduler_fn.ScheduledEvent) -> None:
         """Triggered automatically every 15 minutes by Cloud Scheduler."""
