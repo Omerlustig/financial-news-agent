@@ -33,21 +33,21 @@
 - Modify: `news-agent/src/storage/sqlite.py`
 - Test: `news-agent/tests/test_storage.py`
 
-- [ ] **Step 1: Write failing tests in `news-agent/tests/test_storage.py`**
+- [x] **Step 1: Write failing tests in `news-agent/tests/test_storage.py`**
   - Test `EventLineageRecord` with `directional_stance` field.
   - Test `storage.get_pending_return_events(horizon="1d", min_age_hours=24)`.
   - Test `storage.get_resolved_lineage_records()`.
-- [ ] **Step 2: Add models to `news-agent/src/models.py`**
+- [x] **Step 2: Add models to `news-agent/src/models.py`**
   - Add `CredibilityTier(str, Enum)`.
   - Add `SourceCredibilityRecord(BaseModel)`.
   - Add `PerformanceMetricsSummary(BaseModel)`.
   - Add `directional_stance: Optional[str] = "NEUTRAL"` to `EventLineageRecord`.
-- [ ] **Step 3: Update `news-agent/src/storage/sqlite.py`**
+- [x] **Step 3: Update `news-agent/src/storage/sqlite.py`**
   - Add `directional_stance` column to `event_lineage` table schema with migration check.
   - Implement `get_pending_return_events` and `get_resolved_lineage_records`.
-- [ ] **Step 4: Run tests and ensure all pass**
+- [x] **Step 4: Run tests and ensure all pass**
   - `pytest news-agent/tests/test_storage.py -v`
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   - `git commit -m "feat(storage): add directional stance to event lineage and pending return queries"`
 
 ---
@@ -59,7 +59,7 @@
 - Modify: `news-agent/src/analysis/__init__.py`
 - Test: `news-agent/tests/test_performance.py`
 
-- [ ] **Step 1: Write failing unit tests in `news-agent/tests/test_performance.py`**
+- [x] **Step 1: Write failing unit tests in `news-agent/tests/test_performance.py`**
   - Test directional return math:
     * Bullish stance + price gain -> positive alpha, WIN.
     * Bullish stance + price drop -> negative alpha, LOSS.
@@ -68,15 +68,15 @@
   - Test hit rate calculation with friction threshold ($\pm 0.20\%$).
   - Test publisher credibility scorecard aggregation and tier assignment.
   - Test updating forward returns via mock price fetcher.
-- [ ] **Step 2: Implement `PerformanceTrackerEngine` in `news-agent/src/analysis/performance.py`**
+- [x] **Step 2: Implement `PerformanceTrackerEngine` in `news-agent/src/analysis/performance.py`**
   - Implement `compute_directional_alpha(stance, initial_price, current_price)`.
   - Implement `classify_outcome(stance, return_pct)`.
   - Implement `update_forward_returns(storage, price_fetcher, min_age_hours_1d=24, min_age_hours_7d=168)`.
   - Implement `calculate_performance_metrics(storage, min_opportunity=6.0, ticker=None, source=None)`.
-- [ ] **Step 3: Export in `news-agent/src/analysis/__init__.py`**
-- [ ] **Step 4: Run tests and verify 100% pass rate**
+- [x] **Step 3: Export in `news-agent/src/analysis/__init__.py`**
+- [x] **Step 4: Run tests and verify 100% pass rate**
   - `pytest news-agent/tests/test_performance.py -v`
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
   - `git commit -m "feat(analysis): implement directional alpha math, hit rate, and publisher credibility engine"`
 
 ---
@@ -87,13 +87,13 @@
 - Modify: `news-agent/src/pipeline.py`
 - Test: `news-agent/tests/test_pipeline.py`
 
-- [ ] **Step 1: Write test in `news-agent/tests/test_pipeline.py`**
+- [x] **Step 1: Write test in `news-agent/tests/test_pipeline.py`**
   - Verify that `EventLineageRecord` stored in SQLite contains `directional_stance` from `analysis.directional_stance`.
-- [ ] **Step 2: Update `news-agent/src/pipeline.py`**
+- [x] **Step 2: Update `news-agent/src/pipeline.py`**
   - Pass `directional_stance=analysis.directional_stance.value if hasattr(analysis.directional_stance, "value") else str(analysis.directional_stance)` into `EventLineageRecord`.
-- [ ] **Step 3: Run pipeline tests**
+- [x] **Step 3: Run pipeline tests**
   - `pytest news-agent/tests/test_pipeline.py -v`
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
   - `git commit -m "feat(pipeline): persist directional stance in event lineage record"`
 
 ---
@@ -104,20 +104,20 @@
 - Modify: `news-agent/src/cli.py`
 - Test: `news-agent/tests/test_cli.py`
 
-- [ ] **Step 1: Write CLI tests in `news-agent/tests/test_cli.py`**
+- [x] **Step 1: Write CLI tests in `news-agent/tests/test_cli.py`**
   - Test `performance` command with empty database.
   - Test `performance` command with populated return records (renders Global Metrics & Publisher Scorecard).
   - Test `performance --update` flag.
-- [ ] **Step 2: Implement `performance` command in `news-agent/src/cli.py`**
+- [x] **Step 2: Implement `performance` command in `news-agent/src/cli.py`**
   - Options: `--update/--no-update`, `--ticker`, `--source`, `--min-opportunity`.
   - Renders:
     1. Rich summary panel for Global Hit Rate and Alpha (1-day & 7-day).
     2. Rich table for Publisher Credibility Scorecard (Source, Events, Avg Quality, 1d Hit Rate, Avg Alpha, Tier).
     3. Rich table for Catalyst Realized Return Ledger.
-- [ ] **Step 3: Run CLI tests and full test suite**
+- [x] **Step 3: Run CLI tests and full test suite**
   - `pytest news-agent/tests/test_cli.py -v`
   - `pytest news-agent/tests/ -v`
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
   - `git commit -m "feat(cli): add performance command for measurable alpha tracking and publisher credibility"`
 
 ---
