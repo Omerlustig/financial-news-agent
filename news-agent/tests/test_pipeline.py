@@ -10,6 +10,7 @@ from src.models import (
     DirectionalStance,
     FourDimensionalSentiment,
     AdversarialReview,
+    TechnicalIndicatorSummary,
 )
 from src.pipeline import Pipeline, CycleSummary
 from src.analysis.analyzer import AnalysisError
@@ -1605,10 +1606,17 @@ def test_pipeline_force_mode_strictly_enforces_gates_and_suppresses_non_qualifyi
 
     mock_analyzer.analyze.side_effect = [analysis_qualifying, analysis_non_qualifying]
 
+    mock_technical = MagicMock()
+    mock_technical.get_technical_summary.return_value = TechnicalIndicatorSummary(
+        symbol="$NVDA", recommendation="STRONG_BUY", close_price=125.0
+    )
+    mock_technical.calculate_technical_confluence.return_value = (0.5, "Strong Bullish Confluence", {})
+
     pipeline = Pipeline(
         storage=storage,
         analyzer=mock_analyzer,
         notifier=mock_notifier,
+        technical_engine=mock_technical,
         force=True,  # Force mode active!
         min_score=8,
     )

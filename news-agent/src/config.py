@@ -78,9 +78,6 @@ class LLMSettings(BaseModel):
         default_factory=lambda: [
             "gemini/gemini-3.7-flash",
             "gemini/gemini-3.6-flash",
-            "gemini/gemini-2.5-flash",
-            "gemini/gemini-2.0-flash",
-            "gemini/gemini-1.5-flash",
             "gpt-4o-mini",
         ],
         description="Ordered list of fallback models on rate limit or failure."

@@ -157,9 +157,6 @@ class MarketImpactAnalyzer:
             standard_fallbacks = [
                 "gemini/gemini-3.7-flash",
                 "gemini/gemini-3.6-flash",
-                "gemini/gemini-2.5-flash",
-                "gemini/gemini-2.0-flash",
-                "gemini/gemini-1.5-flash",
             ]
             if os.environ.get("OPENAI_API_KEY"):
                 standard_fallbacks.append("gpt-4o-mini")

@@ -18,9 +18,6 @@ llm:
   fallback_models:
     - "gemini/gemini-3.7-flash"
     - "gemini/gemini-3.6-flash"
-    - "gemini/gemini-2.5-flash"
-    - "gemini/gemini-2.0-flash"
-    - "gemini/gemini-1.5-flash"
     - "gpt-4o-mini"
   enable_cache: true # Enable LiteLLM response caching
   monthly_budget_usd: 10.0 # Monthly LLM spending cap in USD
