@@ -516,7 +516,11 @@ def test_source(
     console.print(f"[cyan]Testing feed ingestion for source:[/] [bold]{matching_source.name}[/bold]")
     console.print(f"[dim]URL: {matching_source.url} (Type: {matching_source.type}, Enabled: {matching_source.enabled})[/dim]\n")
 
-    fetcher = RSSFetcher(matching_source, timeout=15.0)
+    if matching_source.type.lower() == "html":
+        from src.ingestion.html import HTMLFetcher
+        fetcher = HTMLFetcher(matching_source, timeout=15.0)
+    else:
+        fetcher = RSSFetcher(matching_source, timeout=15.0)
     articles = fetcher.fetch()
 
     if not articles:

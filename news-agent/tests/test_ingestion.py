@@ -578,5 +578,48 @@ def test_rss_fetcher_per_source_recency_override():
         assert articles[0].title == "20min Article"
 
 
+def test_html_fetcher_parses_articles():
+    from src.ingestion.html import HTMLFetcher
+    mock_html = """
+    <html>
+      <head><title>FinURLs</title></head>
+      <body>
+        <a href="https://finurls.com/about">About us</a>
+        <a href="#section">Internal section</a>
+        <a href="https://bloomberg.com/news/article-1">Fed cuts benchmark interest rate unexpectedly</a>
+        <a href="https://cnbc.com/2026/apple-earnings">Apple reports record quarterly revenue and margins</a>
+      </body>
+    </html>
+    """
+    src = SourceConfig(name="FinURLs Aggregator", type="html", url="https://finurls.com/", enabled=True, max_items=5)
+    mock_resp = MagicMock()
+    mock_resp.text = mock_html
+    mock_resp.raise_for_status.return_value = None
+
+    with patch("requests.get", return_value=mock_resp):
+        fetcher = HTMLFetcher(src)
+        articles = fetcher.fetch()
+        assert len(articles) == 2
+        assert "Fed cuts benchmark" in articles[0].title
+        assert "https://bloomberg.com/news/article-1" == articles[0].url
+        assert "Apple reports record" in articles[1].title
+
+
+def test_fetch_all_sources_includes_html_sources():
+    src_rss = SourceConfig(name="RSS Source", type="rss", url="https://example.com/rss", enabled=True)
+    src_html = SourceConfig(name="HTML Source", type="html", url="https://example.com/news", enabled=True)
+    
+    mock_rss_article = RawArticle(title="RSS Title", url="https://example.com/1", source_name="RSS Source")
+    mock_html_article = RawArticle(title="HTML Title", url="https://example.com/2", source_name="HTML Source")
+
+    with patch("src.ingestion.rss.RSSFetcher.fetch", return_value=[mock_rss_article]), \
+         patch("src.ingestion.html.HTMLFetcher.fetch", return_value=[mock_html_article]):
+        results = fetch_all_sources([src_rss, src_html])
+        assert len(results) == 2
+        assert results[0].title == "RSS Title"
+        assert results[1].title == "HTML Title"
+
+
+
 
 

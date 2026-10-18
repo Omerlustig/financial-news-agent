@@ -8,6 +8,22 @@ sources:
     url: "https://feeds.feedburner.com/reuters/businessNews"
     enabled: true
 
+  - name: "Reuters Live Wire"
+    type: "rss"
+    url: "https://news.google.com/rss/search?q=site:reuters.com/business+OR+site:reuters.com/markets+when:1d&hl=en-US&gl=US&ceid=US:en"
+    enabled: true
+
+  - name: "Seeking Alpha Market News"
+    type: "rss"
+    url: "https://seekingalpha.com/market_currents.xml"
+    enabled: true
+
+  - name: "FinURLs Aggregator"
+    type: "html"
+    url: "https://finurls.com/"
+    enabled: true
+    max_items: 20
+
   - name: "CNBC Top News"
     type: "rss"
     url: "https://www.cnbc.com/id/100003114/device/rss/rss.html"
@@ -21,6 +37,11 @@ sources:
   - name: "Financial Times"
     type: "rss"
     url: "https://www.ft.com/news-feed?format=rss"
+    enabled: true
+
+  - name: "Financial Times FirstFT"
+    type: "rss"
+    url: "https://news.google.com/rss/search?q=%22FirstFT%22+site:ft.com&hl=en-US&gl=US&ceid=US:en"
     enabled: true
 
   - name: "Bloomberg Markets"

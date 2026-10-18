@@ -526,22 +526,31 @@ def fetch_all_sources(
             logger.debug("Skipping disabled source '%s'", source.name)
             continue
 
-        if source.type.lower() != "rss":
+        stype = source.type.lower()
+        if stype not in ("rss", "html"):
             logger.info("Unsupported source type '%s' for '%s', skipping", source.type, source.name)
             continue
 
         try:
-            fetcher = RSSFetcher(
-                source,
-                timeout=timeout,
-                max_items=max_items_per_source,
-                max_article_age_minutes=max_article_age_minutes,
-                storage=storage,
-                enable_etag_cache=enable_etag_cache,
-                max_retries=max_retries,
-                retry_backoff=retry_backoff,
-                extract_full_body=extract_full_body,
-            )
+            if stype == "html":
+                from src.ingestion.html import HTMLFetcher
+                fetcher = HTMLFetcher(
+                    source,
+                    timeout=timeout,
+                    max_items=max_items_per_source,
+                )
+            else:
+                fetcher = RSSFetcher(
+                    source,
+                    timeout=timeout,
+                    max_items=max_items_per_source,
+                    max_article_age_minutes=max_article_age_minutes,
+                    storage=storage,
+                    enable_etag_cache=enable_etag_cache,
+                    max_retries=max_retries,
+                    retry_backoff=retry_backoff,
+                    extract_full_body=extract_full_body,
+                )
             articles = fetcher.fetch()
             all_articles.extend(articles)
         except Exception as exc:
