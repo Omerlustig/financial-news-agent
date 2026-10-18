@@ -197,43 +197,42 @@ def get_directional_simple_explanation(stance_val: Optional[str], sectors: List[
 
 
 def get_simple_reason_for_beneficiary(ticker: str, analysis: MarketImpactAnalysis) -> str:
-    """Generate a clear 'Because' explanation for why a stock/sector is favored."""
-    cleaned = ticker.strip().upper()
-    if cleaned == "$FSLR":
-        return "Because it already manufactures domestically in the US and gains competitive advantage from trade restrictions."
-    if cleaned in ("$VRNS",):
-        return "Because the buyout offer provides immediate equity re-rating toward the acquisition price."
-    if cleaned in ("$PANW", "$CRWD", "$CHKP", "$FTNT", "$CIBR"):
-        return "Because expanding sector M&A valuation multiples lift competitor valuations across cybersecurity peers."
-    if cleaned in ("$NVDA", "$TSM", "$AVGO"):
-        return "Because strong enterprise AI demand and backlog acceleration directly expand operating margins."
-    if cleaned in ("$ACN", "$INFY"):
-        return "Because US visa restrictions accelerate enterprise offshoring and IT consultancy contract awards."
-    if cleaned in ("$DAL", "$UAL", "$AAL"):
-        return "Because capacity discipline and premium route demand support higher passenger yields."
+    """Generate a clear, dynamic 'Because' explanation for why a stock/sector is favored based on the actual catalyst."""
     if analysis.causal_chain and analysis.causal_chain.economic_mechanism:
         mech = analysis.causal_chain.economic_mechanism.strip()
         if len(mech) > 130:
             mech = mech[:127] + "..."
+        if mech.lower().startswith("because "):
+            return mech
         return f"Because {mech[0].lower() + mech[1:]}"
+    elif analysis.catalyst_thesis:
+        thesis = analysis.catalyst_thesis.strip()
+        if len(thesis) > 130:
+            thesis = thesis[:127] + "..."
+        return f"Because {thesis[0].lower() + thesis[1:]}"
     return "Because it stands to capture market share and benefit from the positive catalyst."
 
 
 def get_simple_reason_for_exposed(ticker: str, analysis: MarketImpactAnalysis) -> str:
-    """Generate a clear 'Because' explanation for why a stock/sector should be avoided or hedged."""
-    cleaned = ticker.strip().upper()
-    if cleaned in ("$RUN", "$ENPH", "$SEDG"):
-        return "Because they install residential panels and may face higher equipment costs and supply shortages."
-    if cleaned in ("$INTC",):
-        return "Because of foundry packaging bottlenecks, delayed roadmap execution, and margin pressure."
-    if cleaned in ("$MSFT", "$ADBE"):
-        return "Because tightening immigration/visa programs elevates engineering wage inflation and project overhead."
+    """Generate a clear, dynamic 'Because' explanation for why a stock/sector should be avoided/hedged based on the actual catalyst."""
     if analysis.causal_chain and analysis.causal_chain.counterarguments:
         counter = analysis.causal_chain.counterarguments.strip()
         if len(counter) > 130:
             counter = counter[:127] + "..."
-        return f"Because of {counter[0].lower() + counter[1:]}"
-    return "Because it faces margin pressure, rising supply costs, or regulatory headwinds."
+        if counter.lower().startswith("because "):
+            return counter
+        return f"Because {counter[0].lower() + counter[1:]}"
+    elif analysis.causal_chain and analysis.causal_chain.economic_mechanism:
+        mech = analysis.causal_chain.economic_mechanism.strip()
+        if len(mech) > 130:
+            mech = mech[:127] + "..."
+        return f"Because headwinds: {mech[0].lower() + mech[1:]}"
+    elif analysis.catalyst_thesis:
+        thesis = analysis.catalyst_thesis.strip()
+        if len(thesis) > 130:
+            thesis = thesis[:127] + "..."
+        return f"Because {thesis[0].lower() + thesis[1:]}"
+    return "Because it faces margin pressure, rising supply costs, or operational headwinds."
 
 
 def format_telegram_message(

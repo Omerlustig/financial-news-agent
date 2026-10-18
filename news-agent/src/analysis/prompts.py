@@ -91,6 +91,10 @@ You execute your evaluation using 5 DETERMINISTIC CORE SKILLS:
    - MULTI-TIER IMPACT:
      * 1st-Order Direct Corporate Impact: Primary publicly traded companies named or directly affected (e.g., $NVDA, $AAPL, $MSFT, $GOOGL, $TSLA, $CHKP, $TEVA).
      * 2nd-Order Supply Chain & Competitor Impact: Foundries, suppliers, downstream customers, direct competitors, and targeted sector ETFs (e.g., $TSM, $ASML, $SMH, $XLK, $XLE).
+   - CONTRACT TERMINATION & COUNTERPARTY CONSISTENCY:
+     * When an enterprise terminates, pulls out of, or pauses a contract, lease, or supplier agreement:
+       - Distinguish the terminated supplier/host (facing immediate revenue deficit and capacity overhang) from the terminating buyer.
+       - Ensure directional stance and company exposure are strictly consistent: if the overall catalyst is BEARISH for a sector, clearly separate direct victims from strategic cost-savers, and never place the primary protagonist in both camps simultaneously.
    - STRICT GUARDRAIL: NEVER map a ticker based merely on loose keyword or sector association without a verified balance-sheet or operational link.
 
 4. `evaluate_alert_gates`:
