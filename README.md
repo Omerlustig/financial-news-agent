@@ -472,7 +472,27 @@ Vercel Cron allows running serverless scheduled executions without persistent se
    ```
    > **Note on Storage**: Since Vercel Serverless is ephemeral, configure `DATABASE_PATH` to point to a mounted cloud storage directory or integrate an external remote SQLite provider (e.g. Turso / LibSQL).
 
-### Option 4: Google Cloud Run & Firebase Functions
+### Option 4: Firebase Functions (2nd Gen) & GitHub Actions CI/CD
+
+The agent supports fully automated deployment to **Firebase Cloud Functions (2nd Gen)** on every `git push` via GitHub Actions:
+
+- **Cron Schedule**: Cloud Scheduler automatically triggers `scan_financial_news` every 15 minutes.
+- **State Persistence**: Syncs SQLite `agent.db` with Firebase Storage across serverless executions to prevent duplicate alerts.
+- **GitHub CI/CD**: Automatically runs tests and deploys via `.github/workflows/firebase-deploy.yml`.
+
+👉 **Detailed Step-by-Step Setup Guide**: [`docs/firebase_deployment_guide.md`](docs/firebase_deployment_guide.md)
+
+#### Manual Deployment via Firebase CLI:
+```bash
+# Login and set project
+firebase login
+firebase use <YOUR_FIREBASE_PROJECT_ID>
+
+# Deploy scheduled function
+firebase deploy --only functions
+```
+
+### Option 5: Google Cloud Run & Container Jobs
 
 Deploy as a serverless container job triggered by Cloud Scheduler:
 

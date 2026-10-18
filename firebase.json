@@ -1,0 +1,18 @@
+{
+  "functions": [
+    {
+      "source": "news-agent",
+      "codebase": "default",
+      "ignore": [
+        "venv",
+        ".git",
+        "tests",
+        "data",
+        "__pycache__",
+        "*.pyc",
+        ".coverage",
+        ".pytest_cache"
+      ]
+    }
+  ]
+}
