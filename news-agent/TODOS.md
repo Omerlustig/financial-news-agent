@@ -15,10 +15,10 @@
   - Systematic hit rate, Sharpe/Sortino ratios, and false positive rates per source newsroom.
   - Source credibility performance scoring across US and Israeli publishers.
 
-## Core Architectural Upgrades (Active Scope)
-- [ ] 1. Fact Verification & Provenance Engine: Separate facts, reported claims, and speculation; verify material events against official primary sources (SEC 8-K/10-Q, MAYA, Fed, official press releases) and require independent corroboration.
-- [ ] 2. Novelty & Expectation Gap Analysis: Contrast breaking news against pre-existing consensus, prior guidance, and pre-news price action (distinguish good news vs unexpectedly good news vs priced-in news).
-- [ ] 3. Four-Dimensional Sentiment & Impact Decomposition: Disentangle raw linguistic sentiment, fundamental business impact, market expectation surprise, and directional price implication.
-- [ ] 4. Self-Challenger & Thesis Invalidation Subagent: Adversarial review arguing against the initial thesis, detecting priced-in risk, sector co-movement, and defining explicit invalidation criteria.
-- [ ] 5. Two-Layer Gate Decision Engine: Decouple News Event Quality score from Actionable Investment Opportunity score.
-- [ ] 6. Persistent Structured Event Memory & Lineage: Track event IDs, lineage across multiple days, historical catalyst returns, source reliability metrics, and deduplication across follow-up stories.
+## Core Architectural Upgrades (Completed)
+- [x] 1. Fact Verification & Provenance Engine: Separate facts, reported claims, and speculation; verify material events against official primary sources (SEC 8-K/10-Q, MAYA, Fed, official press releases) and require independent corroboration.
+- [x] 2. Novelty & Expectation Gap Analysis: Contrast breaking news against pre-existing consensus, prior guidance, and pre-news price action (distinguish good news vs unexpectedly good news vs priced-in news).
+- [x] 3. Four-Dimensional Sentiment & Impact Decomposition: Disentangle raw linguistic sentiment, fundamental business impact, market expectation surprise, and directional price implication.
+- [x] 4. Self-Challenger & Thesis Invalidation Subagent: Adversarial review arguing against the initial thesis, detecting priced-in risk, sector co-movement, and defining explicit invalidation criteria.
+- [x] 5. Two-Layer Gate Decision Engine: Decouple News Event Quality score from Actionable Investment Opportunity score.
+- [x] 6. Persistent Structured Event Memory & Lineage: Track event IDs, lineage across multiple days, historical catalyst returns, source reliability metrics, and deduplication across follow-up stories.
