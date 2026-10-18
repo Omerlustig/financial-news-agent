@@ -7,11 +7,17 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from src.models import DirectionalStance, TechnicalIndicatorSummary
 
 logger = logging.getLogger("technical_engine")
+
+# Quantitative Indicator Thresholds
+RSI_OVERBOUGHT = 70.0
+RSI_SEVERE_OVERBOUGHT = 75.0
+RSI_OVERSOLD = 30.0
+RSI_EXTREME_OVERSOLD = 25.0
 
 try:
     from tradingview_ta import TA_Handler, Interval, Exchange
@@ -26,6 +32,11 @@ except ImportError:
 class TradingViewEngine:
     """Queries TradingView scanner for real-time technical indicators and calculates confluence."""
 
+    RSI_OVERBOUGHT = RSI_OVERBOUGHT
+    RSI_SEVERE_OVERBOUGHT = RSI_SEVERE_OVERBOUGHT
+    RSI_OVERSOLD = RSI_OVERSOLD
+    RSI_EXTREME_OVERSOLD = RSI_EXTREME_OVERSOLD
+
     def __init__(self, cache_ttl_seconds: int = 900) -> None:
         self.cache_ttl = cache_ttl_seconds
         # In-memory cache: symbol -> (timestamp, TechnicalIndicatorSummary)
@@ -38,6 +49,84 @@ class TradingViewEngine:
             cleaned = cleaned[1:]
         # Normalize BRK.B to BRK_B or BRK.B
         return cleaned
+
+    def calculate_technical_confluence(
+        self,
+        stance: Optional[str],
+        rec: str,
+        rsi: Optional[float],
+        close: Optional[float],
+        sma50: Optional[float],
+        sma200: Optional[float] = None,
+    ) -> Tuple[float, str, Dict[str, Any]]:
+        """Calculate quantitative technical confluence score modifier (-2.0 to +2.0),
+
+        summary verdict string, and structural technical flags.
+        """
+        stance_str = (stance or "NEUTRAL").upper()
+        rec_upper = (rec or "NEUTRAL").upper()
+
+        technical_flags: Dict[str, Any] = {
+            "is_overbought": (rsi >= self.RSI_OVERBOUGHT) if rsi is not None else False,
+            "is_oversold": (rsi <= self.RSI_OVERSOLD) if rsi is not None else False,
+            "golden_cross": (sma50 > sma200) if (sma50 is not None and sma200 is not None) else False,
+            "death_cross": (sma50 < sma200) if (sma50 is not None and sma200 is not None) else False,
+            "above_sma50": (close > sma50) if (close is not None and sma50 is not None) else False,
+            "above_sma200": (close > sma200) if (close is not None and sma200 is not None) else False,
+        }
+
+        confluence_score_mod = 0.0
+        verdict_summary = ""
+
+        is_bull_stance = "BULL" in stance_str
+        is_bear_stance = "BEAR" in stance_str
+
+        if is_bull_stance:
+            if rsi is not None and rsi >= self.RSI_SEVERE_OVERBOUGHT:
+                confluence_score_mod = -1.0
+                verdict_summary = "⚠️ Overbought warning: RSI >= 75 indicates severe overbought risk despite bullish news."
+            elif any(w in rec_upper for w in ["SELL"]):
+                confluence_score_mod = -1.5
+                verdict_summary = "⚡ Divergence: Bullish news catalyst facing technical resistance / downtrend."
+            elif any(w in rec_upper for w in ["BUY"]) and (rsi is None or rsi < self.RSI_OVERBOUGHT) and technical_flags["above_sma50"]:
+                if "STRONG" in rec_upper or technical_flags["above_sma200"] or technical_flags["golden_cross"]:
+                    confluence_score_mod = 2.0
+                else:
+                    confluence_score_mod = 1.5
+                verdict_summary = "🟢 Bullish confluence: Technical momentum confirms catalyst."
+            else:
+                confluence_score_mod = 0.0
+                verdict_summary = "📈 Constructive: Catalyst aligns with stable technical backdrop."
+
+        elif is_bear_stance:
+            if rsi is not None and rsi <= self.RSI_EXTREME_OVERSOLD:
+                confluence_score_mod = -1.0
+                verdict_summary = "⚠️ Oversold bounce risk: RSI <= 25 indicates extreme oversold snapback risk."
+            elif any(w in rec_upper for w in ["BUY"]):
+                confluence_score_mod = -1.5
+                verdict_summary = "⚡ Divergence: Bearish catalyst against prevailing technical uptrend."
+            elif any(w in rec_upper for w in ["SELL"]) and (rsi is None or rsi > self.RSI_OVERSOLD) and (close is not None and sma50 is not None and close < sma50):
+                below_sma200 = (close is not None and sma200 is not None and close < sma200)
+                if "STRONG" in rec_upper or below_sma200 or technical_flags["death_cross"]:
+                    confluence_score_mod = 2.0
+                else:
+                    confluence_score_mod = 1.5
+                verdict_summary = "🔴 Bearish confluence: Technical breakdown confirms catalyst."
+            else:
+                confluence_score_mod = 0.0
+                verdict_summary = "📉 Headwind: Technical backdrop reflects softening demand."
+
+        else:
+            confluence_score_mod = 0.0
+            if "STRONG_BUY" in rec_upper or "BUY" in rec_upper:
+                verdict_summary = f"🟢 Technicals favor upside: {rec_upper}"
+            elif "STRONG_SELL" in rec_upper or "SELL" in rec_upper:
+                verdict_summary = f"🔴 Technicals favor downside: {rec_upper}"
+            else:
+                verdict_summary = f"⚖️ Neutral technical setup: {rec_upper}"
+
+        confluence_score_mod = max(-2.0, min(2.0, float(confluence_score_mod)))
+        return confluence_score_mod, verdict_summary, technical_flags
 
     def compute_confluence_note(
         self,

@@ -1,9 +1,19 @@
 import logging
+import re
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-from src.models import RawArticle, MarketImpactAnalysis, ImpactGrade, EventStatus
+from src.models import (
+    RawArticle,
+    MarketImpactAnalysis,
+    ImpactGrade,
+    EventStatus,
+    EventLineageRecord,
+    ProvenanceLevel,
+    NoveltyState,
+)
 from src.config import Settings, SourceConfig, WatchlistSettings, load_settings, load_sources
 from src.ingestion.rss import fetch_all_sources
 from src.storage.base import BaseStorage
@@ -13,6 +23,9 @@ from src.analysis.corroborator import EventCorroborator
 from src.analysis.surge import SurgeVelocityEngine
 from src.analysis.trend import TrendEngine
 from src.analysis.technical import TradingViewEngine
+from src.analysis.verification import FactVerificationEngine
+from src.analysis.novelty import NoveltyEngine
+from src.analysis.decision_gate import TwoLayerGateEngine
 from src.notification.base import BaseNotifier
 from src.notification.telegram import TelegramNotifier
 from src.notification.console import ConsoleNotifier
@@ -75,6 +88,10 @@ class Pipeline:
         corroborator: Optional[EventCorroborator] = None,
         surge_engine: Optional[SurgeVelocityEngine] = None,
         trend_engine: Optional[TrendEngine] = None,
+        fact_verification_engine: Optional[FactVerificationEngine] = None,
+        novelty_engine: Optional[NoveltyEngine] = None,
+        gate_engine: Optional[TwoLayerGateEngine] = None,
+        technical_engine: Optional[TradingViewEngine] = None,
         sources: Optional[List[SourceConfig]] = None,
         fetcher: Optional[Callable[[], List[RawArticle]]] = None,
         min_score: Optional[int] = None,
@@ -201,7 +218,14 @@ class Pipeline:
             self.notifier = ConsoleNotifier()
 
         # Technical Analysis subsystem (TradingView confluence)
-        self.technical_engine = TradingViewEngine()
+        self.technical_engine = technical_engine if technical_engine is not None else TradingViewEngine()
+
+        # Institutional Intelligence engines
+        self.fact_verification_engine = (
+            fact_verification_engine if fact_verification_engine is not None else FactVerificationEngine()
+        )
+        self.novelty_engine = novelty_engine if novelty_engine is not None else NoveltyEngine()
+        self.gate_engine = gate_engine if gate_engine is not None else TwoLayerGateEngine()
 
 
     @classmethod
@@ -245,7 +269,17 @@ class Pipeline:
             )
             return True
 
-        # 1. Hard Gate: Workflow Status
+        # 1. Two-Layer Gate: Check gate_verdict if present
+        if getattr(analysis, "two_layer_gate", None) is not None:
+            if analysis.two_layer_gate.gate_verdict != "ALERT" and not self.alert_on_all:
+                logger.info(
+                    "Alert suppressed: two_layer_gate verdict is '%s' (audit reason: %s)",
+                    analysis.two_layer_gate.gate_verdict,
+                    analysis.two_layer_gate.rejection_reason,
+                )
+                return False
+
+        # 2. Hard Gate: Workflow Status
         if analysis.status != EventStatus.OPPORTUNITY_CANDIDATE:
             logger.info(
                 "Alert suppressed: status '%s' is not %s (audit reason: non-qualifying event status)",
@@ -361,6 +395,31 @@ class Pipeline:
         # 4. Iterate through candidate event clusters
         for cluster in clusters:
             canonical = cluster.canonical_article
+
+            # Lineage search: extract informative title tokens and primary ticker candidate
+            title_tokens = [w.lower() for w in re.findall(r"\b[A-Za-z]{3,}\b", canonical.title)]
+            ticker_matches = re.findall(r"\$([A-Z]{1,5})\b", canonical.title)
+            primary_ticker_cand = f"${ticker_matches[0]}" if ticker_matches else ""
+
+            existing_lineage: Optional[EventLineageRecord] = None
+            if hasattr(self.storage, "find_existing_event") and callable(self.storage.find_existing_event):
+                try:
+                    res = self.storage.find_existing_event(primary_ticker_cand, title_tokens)
+                    if isinstance(res, EventLineageRecord):
+                        existing_lineage = res
+                except Exception as exc:
+                    logger.debug("Error checking existing lineage for '%s': %s", canonical.title, exc)
+
+            # Novelty Assessment
+            novelty_state, nov_score, nov_rationale = self.novelty_engine.assess_novelty(
+                canonical, existing_lineage
+            )
+
+            # Fact Verification & Source Provenance
+            provenance, statements, fact_score, is_verified = self.fact_verification_engine.extract_and_verify_facts(
+                canonical, cluster.articles
+            )
+
             try:
                 analysis = self.analyzer.analyze(canonical)
             except Exception as exc:
@@ -373,6 +432,23 @@ class Pipeline:
                 )
                 errors_count += 1
                 continue
+
+            # Populate institutional intelligence fields
+            analysis.novelty_state = novelty_state
+            analysis.provenance_level = provenance
+            if existing_lineage and hasattr(existing_lineage, "event_id") and existing_lineage.event_id:
+                analysis.event_id = existing_lineage.event_id
+            else:
+                analysis.event_id = f"evt_{abs(hash(canonical.title)) % 100000000}_{int(time.time())}"
+
+            # Audit hard-gates against verification and novelty
+            if analysis.hard_gates is not None:
+                if not is_verified:
+                    analysis.hard_gates.is_verified = False
+                    analysis.hard_gates.passes_all_gates = False
+                if novelty_state == NoveltyState.PRICED_IN_OR_RECYCLED:
+                    analysis.hard_gates.is_novel = False
+                    analysis.hard_gates.passes_all_gates = False
 
             # If article was not analyzed by LLM (rate limit exhausted or credentials unavailable),
             # do not persist to DB/cache so it will be retried in the next polling cycle.
@@ -479,6 +555,7 @@ class Pipeline:
                         analysis.is_market_moving = True
 
             # TradingView Technical Confluence check for candidate tickers
+            confluence_mod = 0.0
             if getattr(self, "technical_engine", None) is not None:
                 candidate_tickers: List[str] = []
                 if analysis.causal_chain:
@@ -505,6 +582,78 @@ class Pipeline:
                                 analysis.technicals.append(tech_info)
                         except Exception as tech_err:
                             logger.debug("TradingView technicals failed for %s: %s", clean_sym, tech_err)
+
+                if analysis.technicals:
+                    primary_tech = analysis.technicals[0]
+                    try:
+                        confluence_mod, _, _ = self.technical_engine.calculate_technical_confluence(
+                            stance=stance_val,
+                            rec=primary_tech.recommendation,
+                            rsi=primary_tech.rsi,
+                            close=primary_tech.close_price,
+                            sma50=primary_tech.sma50,
+                            sma200=primary_tech.sma200,
+                        )
+                    except Exception as c_err:
+                        logger.debug("Error computing technical confluence: %s", c_err)
+                        confluence_mod = 0.0
+
+            # Two-Layer Decision Gate evaluation
+            if analysis.four_d_sentiment is not None:
+                gate_min_opp = float(self.min_confidence_score) if self.min_confidence_score is not None else 8.0
+                gate_min_event = min(8.0, float(self.min_confidence_score)) if self.min_confidence_score is not None else 8.0
+            else:
+                gate_min_opp = (
+                    (float(self.min_confidence_score) / 10.0) * 3.5
+                    if self.min_confidence_score is not None
+                    else 8.0
+                )
+                gate_min_event = 6.0
+
+            gate_decision = self.gate_engine.evaluate_gates(
+                analysis,
+                min_event_quality=gate_min_event,
+                min_opportunity_score=gate_min_opp,
+                technical_confluence_boost=confluence_mod,
+            )
+            analysis.two_layer_gate = gate_decision
+
+            # SQLite Event Lineage persistence
+            if hasattr(self.storage, "record_event_lineage") and callable(self.storage.record_event_lineage):
+                try:
+                    primary_sym = (
+                        analysis.affected_tickers[0]
+                        if analysis.affected_tickers
+                        else (
+                            analysis.causal_chain.beneficiaries[0]
+                            if analysis.causal_chain and analysis.causal_chain.beneficiaries
+                            else (
+                                analysis.causal_chain.negatively_exposed[0]
+                                if analysis.causal_chain and analysis.causal_chain.negatively_exposed
+                                else (primary_ticker_cand or None)
+                            )
+                        )
+                    )
+                    initial_p = None
+                    if analysis.technicals and analysis.technicals[0].close_price is not None:
+                        initial_p = analysis.technicals[0].close_price
+
+                    lineage_rec = EventLineageRecord(
+                        event_id=analysis.event_id,
+                        title=canonical.title,
+                        primary_ticker=primary_sym or None,
+                        first_seen=existing_lineage.first_seen if isinstance(existing_lineage, EventLineageRecord) else (canonical.published_at or datetime.now(timezone.utc)),
+                        last_updated=datetime.now(timezone.utc),
+                        source_count=analysis.corroboration_count,
+                        all_sources=analysis.corroborating_sources or [canonical.source_name],
+                        event_quality_score=gate_decision.event_quality_score,
+                        opportunity_score=gate_decision.opportunity_score,
+                        status=gate_decision.gate_verdict,
+                        initial_price=initial_p,
+                    )
+                    self.storage.record_event_lineage(lineage_rec)
+                except Exception as lin_err:
+                    logger.debug("Error recording event lineage: %s", lin_err)
 
             # Filtering & alert criteria (enforcing Hard Gate Decision Engine)
             alert_warranted = self.should_alert(analysis)
@@ -588,8 +737,10 @@ class Pipeline:
             top_catalysts=top_catalysts,
         )
 
-    def run_cycle(self) -> CycleSummary:
+    def run_cycle(self, force: Optional[bool] = None) -> CycleSummary:
         """Execute a complete scan cycle across all configured sources."""
+        if force is not None:
+            self.force = force
         logger.info("Starting pipeline scan cycle across sources...")
         fetch_error = False
         batch_size = self.batch_size_per_source

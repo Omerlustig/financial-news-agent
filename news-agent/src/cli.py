@@ -870,6 +870,61 @@ def heatmap(
         storage.close()
 
 
+@app.command("history")
+def history(
+    ticker: Optional[str] = typer.Option(None, "--ticker", "-t", help="Filter lineage by primary ticker (e.g. $NVDA)"),
+    limit: int = typer.Option(20, "--limit", "-l", help="Max events to display"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to settings.yaml"),
+    db: Optional[str] = typer.Option(None, "--db", help="Override SQLite database path"),
+) -> None:
+    """Display persistent event lineage records with quality & opportunity scores."""
+    settings = load_settings(config)
+    db_path = db or settings.agent.database_path
+
+    storage = SQLiteStorage(db_path)
+    try:
+        events = storage.list_event_lineage(ticker=ticker, limit=limit)
+        if not events:
+            filter_msg = f" for ticker '{ticker}'" if ticker else ""
+            console.print(f"[yellow]No event lineage records found in database ({db_path}){filter_msg}.[/yellow]")
+            return
+
+        table = Table(title=f"Structured Event Lineage History ({len(events)} Events)")
+        table.add_column("Event ID", style="dim", width=14)
+        table.add_column("Ticker", style="cyan bold")
+        table.add_column("Headline", style="bold")
+        table.add_column("Sources", justify="center")
+        table.add_column("Quality", justify="right")
+        table.add_column("Opportunity", justify="right")
+        table.add_column("Status", justify="center")
+        table.add_column("Initial Price", justify="right")
+
+        for ev in events:
+            eid = str(ev.event_id)[:14]
+            title = str(ev.title)[:50]
+            tick = str(ev.primary_ticker or "N/A")
+            srcs = str(ev.source_count)
+            q_score = f"{float(ev.event_quality_score):.1f}/10"
+            o_score = f"{float(ev.opportunity_score):.1f}/10"
+            status = str(ev.status)
+            p_price = f"${float(ev.initial_price):.2f}" if ev.initial_price is not None else "N/A"
+
+            if status == "ALERT":
+                status_str = f"[bold green]{status}[/bold green]"
+            elif status == "WATCHLIST":
+                status_str = f"[bold yellow]{status}[/bold yellow]"
+            else:
+                status_str = f"[dim]{status}[/dim]"
+
+            table.add_row(eid, tick, title, srcs, q_score, o_score, status_str, p_price)
+
+        console.print()
+        console.print(table)
+        console.print()
+    finally:
+        storage.close()
+
+
 if __name__ == "__main__":
     app()
 

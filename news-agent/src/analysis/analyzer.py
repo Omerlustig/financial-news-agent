@@ -32,6 +32,8 @@ from src.storage.base import BaseStorage
 from src.analysis.prompts import build_analyst_prompt, filter_valid_tickers
 from src.analysis.taxonomy import SECTaxonomyClassifier
 from src.analysis.sentiment import FinancialSentimentEngine
+from src.analysis.sentiment_4d import FourDimensionalSentimentAnalyzer
+from src.analysis.challenger import AdversarialChallenger
 
 
 
@@ -116,6 +118,8 @@ class MarketImpactAnalyzer:
 
         self.fallback_on_error = fallback_on_error
         self.sentiment_engine = FinancialSentimentEngine()
+        self.sentiment_4d_analyzer = FourDimensionalSentimentAnalyzer(sentiment_engine=self.sentiment_engine)
+        self.challenger = AdversarialChallenger()
         self.quota_exhausted = False
 
 
@@ -525,6 +529,25 @@ class MarketImpactAnalyzer:
                 if maya_cat:
                     data["sec_filing_item"] = f"MAYA: {maya_cat}"
 
+        # 4D Sentiment decomposition
+        four_d_payload = data.get("four_d_sentiment")
+        data["four_d_sentiment"] = self.sentiment_4d_analyzer.analyze_4d_sentiment(
+            title=data.get("summary") or (article.title if article else ""),
+            summary=data.get("catalyst_thesis", ""),
+            content=article.content if article and article.content else "",
+            llm_payload=four_d_payload if isinstance(four_d_payload, dict) else None,
+        )
+
+        # Adversarial challenger review
+        adv_payload = data.get("adversarial_review")
+        data["adversarial_review"] = self.challenger.challenge_thesis(
+            title=data.get("summary") or (article.title if article else ""),
+            summary=data.get("catalyst_thesis", ""),
+            stance=str(data.get("directional_stance", "NEUTRAL")),
+            affected_tickers=data.get("affected_tickers", []),
+            llm_payload=adv_payload if isinstance(adv_payload, dict) else None,
+        )
+
         return MarketImpactAnalysis.model_validate(data)
 
 
@@ -573,6 +596,17 @@ class MarketImpactAnalyzer:
             ),
             sentiment=self.sentiment_engine.calibrate_sentiment(
                 text=f"{article.title} {article.summary or ''}".strip()
+            ),
+            four_d_sentiment=self.sentiment_4d_analyzer.analyze_4d_sentiment(
+                title=article.title,
+                summary=article.summary or "",
+                content=article.content or "",
+            ),
+            adversarial_review=self.challenger.challenge_thesis(
+                title=article.title,
+                summary=article.summary or "",
+                stance=DirectionalStance.NEUTRAL.value,
+                affected_tickers=[],
             ),
             recommendation="Maintain observational stance. No action warranted on unverified or fallback analysis.",
             corroborating_sources=[article.source_name] if article.source_name else [],

@@ -22,6 +22,13 @@ from src.models import (
     TrendVerdict,
     TrendMetrics,
     SectorTrendMetrics,
+    StatementType,
+    ProvenanceLevel,
+    NoveltyState,
+    FourDimensionalSentiment,
+    AdversarialReview,
+    TwoLayerGateDecision,
+    EventLineageRecord,
 )
 
 
@@ -1203,6 +1210,336 @@ def test_trend_metrics_acceleration_and_divergence_contracts():
     assert t_div.divergence_type == "BEARISH_PANIC_LIQUIDATION"
     assert t_div.sentiment_acceleration == pytest.approx(-0.2)
     assert t_div.trend_verdict == TrendVerdict.PANIC_CAPITULATION
+
+
+def test_institutional_models_contract_and_serialization():
+    # 1. Enums
+    assert StatementType.VERIFIED_FACT == "VERIFIED_FACT"
+    assert StatementType("attributed_claim") == StatementType.ATTRIBUTED_CLAIM
+    assert ProvenanceLevel.PRIMARY_OFFICIAL == "PRIMARY_OFFICIAL"
+    assert ProvenanceLevel("tier1_financial") == ProvenanceLevel.TIER1_FINANCIAL
+    assert NoveltyState.GENUINE_SURPRISE == "GENUINE_SURPRISE"
+    assert NoveltyState("in_line_confirmation") == NoveltyState.IN_LINE_CONFIRMATION
+
+    # 2. FourDimensionalSentiment
+    s4d = FourDimensionalSentiment(
+        linguistic_sentiment=0.75,
+        fundamental_impact=0.9,
+        expectation_surprise=0.8,
+        price_implication=0.85,
+        surprise_verdict="BEAT",
+    )
+    assert s4d.linguistic_sentiment == pytest.approx(0.75)
+    assert s4d.fundamental_impact == pytest.approx(0.9)
+    assert s4d.expectation_surprise == pytest.approx(0.8)
+    assert s4d.price_implication == pytest.approx(0.85)
+    assert s4d.surprise_verdict == "BEAT"
+
+    # Clamping behavior
+    s4d_clamped = FourDimensionalSentiment(
+        linguistic_sentiment=1.5,
+        fundamental_impact=-2.0,
+        expectation_surprise=10.0,
+        price_implication=-5.0,
+    )
+    assert s4d_clamped.linguistic_sentiment == 1.0
+    assert s4d_clamped.fundamental_impact == -1.0
+    assert s4d_clamped.expectation_surprise == 1.0
+    assert s4d_clamped.price_implication == -1.0
+
+    # 3. AdversarialReview
+    adv = AdversarialReview(
+        bearish_counter_thesis="Margin pressure from high capex ramp",
+        priced_in_risk="Stock already ran up 35% into the announcement",
+        macro_confounding_risk="Broad sector beta rally driven by rate cut expectations",
+        falsification_threshold="Gross margin dropping below 65% in Q3",
+        is_thesis_robust=True,
+    )
+    assert adv.is_thesis_robust is True
+    assert "Margin pressure" in adv.bearish_counter_thesis
+
+    # 4. TwoLayerGateDecision
+    gate = TwoLayerGateDecision(
+        event_quality_score=8.5,
+        opportunity_score=8.2,
+        passes_event_quality_gate=True,
+        passes_opportunity_gate=True,
+        gate_verdict="ALERT",
+        rejection_reason=None,
+    )
+    assert gate.passes_event_quality_gate is True
+    assert gate.gate_verdict == "ALERT"
+
+    # Score clamping
+    gate_clamped = TwoLayerGateDecision(
+        event_quality_score=15.0,
+        opportunity_score=-3.0,
+    )
+    assert gate_clamped.event_quality_score == 10.0
+    assert gate_clamped.opportunity_score == 0.0
+
+    # 5. EventLineageRecord
+    rec = EventLineageRecord(
+        event_id="evt_test_123",
+        title="NVIDIA announces Blackwell Ultra architecture",
+        primary_ticker="NVDA",
+        source_count=3,
+        all_sources=["Reuters", "Bloomberg", "PR Newswire"],
+        event_quality_score=9.0,
+        opportunity_score=8.5,
+        status="ALERT",
+        initial_price=120.50,
+        subsequent_return_1d=0.035,
+        subsequent_return_7d=0.078,
+    )
+    assert rec.primary_ticker == "$NVDA"
+    assert rec.source_count == 3
+    assert len(rec.all_sources) == 3
+
+    # 6. MarketImpactAnalysis backward compatibility & integration
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=9,
+        impact_grade=ImpactGrade.HIGH,
+        affected_tickers=["$NVDA"],
+        summary="High conviction chip catalyst",
+        catalyst_thesis="Next gen AI accelerator ramp",
+        four_d_sentiment=s4d,
+        adversarial_review=adv,
+        two_layer_gate=gate,
+        novelty_state=NoveltyState.GENUINE_SURPRISE,
+        provenance_level=ProvenanceLevel.PRIMARY_OFFICIAL,
+        event_id=rec.event_id,
+    )
+    assert analysis.four_d_sentiment.surprise_verdict == "BEAT"
+    assert analysis.adversarial_review.is_thesis_robust is True
+    assert analysis.two_layer_gate.gate_verdict == "ALERT"
+    assert analysis.novelty_state == NoveltyState.GENUINE_SURPRISE
+    assert analysis.provenance_level == ProvenanceLevel.PRIMARY_OFFICIAL
+    assert analysis.event_id == "evt_test_123"
+
+    # Serialization roundtrip
+    dumped = analysis.model_dump()
+    assert dumped["four_d_sentiment"]["linguistic_sentiment"] == pytest.approx(0.75)
+    assert dumped["novelty_state"] == "GENUINE_SURPRISE"
+    assert dumped["event_id"] == "evt_test_123"
+
+    restored = MarketImpactAnalysis.model_validate(dumped)
+    assert restored.event_id == "evt_test_123"
+    assert restored.novelty_state == NoveltyState.GENUINE_SURPRISE
+
+
+def test_event_lineage_crud_operations(tmp_path):
+    storage = SQLiteStorage(str(tmp_path / "lineage_crud.db"))
+
+    # Initial query on non-existent event
+    assert storage.get_event_lineage("non_existent_evt") is None
+
+    # Create and record an event
+    now = datetime.datetime.now(datetime.timezone.utc)
+    record = EventLineageRecord(
+        event_id="evt_aapl_q3",
+        title="Apple reports record Q3 Services revenue",
+        primary_ticker="AAPL",
+        first_seen=now - datetime.timedelta(minutes=10),
+        last_updated=now,
+        source_count=1,
+        all_sources=["Apple Investor Relations"],
+        event_quality_score=9.5,
+        opportunity_score=8.0,
+        status="WATCHLIST",
+        initial_price=225.0,
+    )
+    storage.record_event_lineage(record)
+
+    # Fetch and verify
+    fetched = storage.get_event_lineage("evt_aapl_q3")
+    assert fetched is not None
+    assert fetched.event_id == "evt_aapl_q3"
+    assert fetched.title == "Apple reports record Q3 Services revenue"
+    assert fetched.primary_ticker == "$AAPL"
+    assert fetched.source_count == 1
+    assert fetched.all_sources == ["Apple Investor Relations"]
+    assert fetched.event_quality_score == pytest.approx(9.5)
+    assert fetched.opportunity_score == pytest.approx(8.0)
+    assert fetched.status == "WATCHLIST"
+    assert fetched.initial_price == pytest.approx(225.0)
+    assert fetched.subsequent_return_1d is None
+    assert fetched.subsequent_return_7d is None
+
+    # Update via record_event_lineage (corroboration update)
+    updated_record = EventLineageRecord(
+        event_id="evt_aapl_q3",
+        title="Apple reports record Q3 Services revenue with AI upside",
+        primary_ticker="$AAPL",
+        first_seen=record.first_seen,
+        last_updated=now + datetime.timedelta(minutes=5),
+        source_count=2,
+        all_sources=["Apple Investor Relations", "Reuters"],
+        event_quality_score=9.8,
+        opportunity_score=8.7,
+        status="ALERT",
+        initial_price=225.0,
+    )
+    storage.record_event_lineage(updated_record)
+
+    fetched_updated = storage.get_event_lineage("evt_aapl_q3")
+    assert fetched_updated is not None
+    assert fetched_updated.title == "Apple reports record Q3 Services revenue with AI upside"
+    assert fetched_updated.source_count == 2
+    assert "Reuters" in fetched_updated.all_sources
+    assert fetched_updated.opportunity_score == pytest.approx(8.7)
+    assert fetched_updated.status == "ALERT"
+
+    # Test update_event_return for 1d and 7d horizons
+    storage.update_event_return(event_id="evt_aapl_q3", horizon="1d", return_pct=2.45)
+    after_1d = storage.get_event_lineage("evt_aapl_q3")
+    assert after_1d.subsequent_return_1d == pytest.approx(2.45)
+
+    storage.update_event_return(event_id="evt_aapl_q3", horizon="7D", return_pct=5.12)
+    after_7d = storage.get_event_lineage("evt_aapl_q3")
+    assert after_7d.subsequent_return_7d == pytest.approx(5.12)
+
+    # Invalid horizon raises ValueError
+    with pytest.raises(ValueError):
+        storage.update_event_return(event_id="evt_aapl_q3", horizon="30d", return_pct=10.0)
+
+    storage.close()
+
+
+def test_event_lineage_find_existing_event_and_token_matching(tmp_path):
+    storage = SQLiteStorage(str(tmp_path / "lineage_matching.db"))
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    ev1 = EventLineageRecord(
+        event_id="evt_nvda_blackwell",
+        title="NVIDIA unveils Blackwell Ultra GPUs for sovereign AI clusters",
+        primary_ticker="NVDA",
+        first_seen=now - datetime.timedelta(hours=2),
+        last_updated=now - datetime.timedelta(hours=2),
+        source_count=2,
+        all_sources=["Reuters", "Bloomberg"],
+        event_quality_score=9.0,
+        opportunity_score=8.5,
+        status="ALERT",
+    )
+    storage.record_event_lineage(ev1)
+
+    # 1. Matching: Same ticker, >= 2 overlapping title tokens ("blackwell", "ultra")
+    match = storage.find_existing_event(
+        ticker="NVDA",
+        title_tokens=["blackwell", "ultra", "delays"],
+        window_hours=48,
+    )
+    assert match is not None
+    assert match.event_id == "evt_nvda_blackwell"
+
+    # 2. Matching with '$' prefix in search ticker
+    match_dollar = storage.find_existing_event(
+        ticker="$NVDA",
+        title_tokens=["Nvidia", "Sovereign", "Architecture"],
+        window_hours=48,
+    )
+    assert match_dollar is not None
+    assert match_dollar.event_id == "evt_nvda_blackwell"
+
+    # 3. Non-matching: Only 1 token overlapping (< 2)
+    single_overlap = storage.find_existing_event(
+        ticker="NVDA",
+        title_tokens=["NVIDIA", "Omniverse", "Robotics"],
+        window_hours=48,
+    )
+    assert single_overlap is None
+
+    # 4. Non-matching: Different ticker even with overlapping tokens
+    diff_ticker = storage.find_existing_event(
+        ticker="AMD",
+        title_tokens=["Blackwell", "Ultra", "GPUs"],
+        window_hours=48,
+    )
+    assert diff_ticker is None
+
+    # 5. Outside time window:
+    old_ev = EventLineageRecord(
+        event_id="evt_msft_old",
+        title="Microsoft announces OpenAI partnership expansion and Azure credits",
+        primary_ticker="MSFT",
+        first_seen=now - datetime.timedelta(hours=60),
+        last_updated=now - datetime.timedelta(hours=60),
+        source_count=1,
+        all_sources=["Microsoft PR"],
+        event_quality_score=8.0,
+        opportunity_score=7.0,
+    )
+    storage.record_event_lineage(old_ev)
+
+    # With window_hours=48 -> None (expired)
+    assert storage.find_existing_event(
+        ticker="MSFT",
+        title_tokens=["OpenAI", "partnership", "expansion"],
+        window_hours=48,
+    ) is None
+
+    # With window_hours=72 -> Matched
+    found_old = storage.find_existing_event(
+        ticker="MSFT",
+        title_tokens=["OpenAI", "partnership", "expansion"],
+        window_hours=72,
+    )
+    assert found_old is not None
+    assert found_old.event_id == "evt_msft_old"
+
+    # 6. Edge cases: empty ticker or empty tokens
+    assert storage.find_existing_event("", ["test", "tokens"]) is None
+    assert storage.find_existing_event("NVDA", []) is None
+    assert storage.find_existing_event("NVDA", ["single"]) is None
+
+    storage.close()
+
+
+def test_storage_schema_migration_includes_event_lineage(tmp_path):
+    db_file = tmp_path / "legacy_v2.db"
+    conn = sqlite3.connect(str(db_file))
+    conn.execute(
+        """
+        CREATE TABLE articles (
+            content_hash TEXT PRIMARY KEY,
+            url TEXT NOT NULL,
+            title TEXT NOT NULL,
+            source_name TEXT NOT NULL,
+            published_at TEXT,
+            created_at TEXT NOT NULL,
+            is_market_moving INTEGER,
+            confidence_score INTEGER,
+            impact_grade TEXT,
+            tickers TEXT,
+            sectors TEXT,
+            alerted INTEGER NOT NULL DEFAULT 0
+        );
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    # Open with SQLiteStorage
+    storage = SQLiteStorage(str(db_file))
+
+    # Record and retrieve event lineage to ensure auto-migration created the table seamlessly
+    rec = EventLineageRecord(
+        event_id="evt_migrated_1",
+        title="Tesla initiates FSD v13 rollout",
+        primary_ticker="TSLA",
+        source_count=1,
+        all_sources=["Electrek"],
+        status="ALERT",
+    )
+    storage.record_event_lineage(rec)
+    fetched = storage.get_event_lineage("evt_migrated_1")
+    assert fetched is not None
+    assert fetched.primary_ticker == "$TSLA"
+    assert fetched.status == "ALERT"
+
+    storage.close()
 
 
 

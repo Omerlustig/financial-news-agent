@@ -279,9 +279,16 @@ def format_telegram_message(
         else:
             lines.append("⭐ <b>[WATCHLIST FOCUS]</b>")
 
-    lines.append(
-        f"🚨 <b>[OPPORTUNITY CANDIDATE | Score: {score}/10 | {escape_html(grade_name)}]</b>"
-    )
+    if getattr(analysis, "two_layer_gate", None) is not None:
+        q_score = round(analysis.two_layer_gate.event_quality_score)
+        o_score = round(analysis.two_layer_gate.opportunity_score)
+        lines.append(
+            f"🚨 <b>[OPPORTUNITY CANDIDATE | Event Quality: {q_score}/10 | Opportunity: {o_score}/10]</b>"
+        )
+    else:
+        lines.append(
+            f"🚨 <b>[OPPORTUNITY CANDIDATE | Score: {score}/10 | {escape_html(grade_name)}]</b>"
+        )
 
     # Stance & Time Horizon
     stance = directional_stance or getattr(analysis, "directional_stance", None) or getattr(analysis, "stance", None)
@@ -356,7 +363,16 @@ def format_telegram_message(
     }
     emoji_badge = emoji_badges.get(sentiment_label_val, f"⚪ {escape_html(sentiment_label_val)}")
     gauge = format_sentiment_gauge(sentiment_score, width=10)
-    lines.append(f"📊 <b>Sentiment:</b> {emoji_badge} | {gauge}")
+    if getattr(analysis, "four_d_sentiment", None) is not None and analysis.four_d_sentiment is not None:
+        fds = analysis.four_d_sentiment
+        lines.append(
+            f"📊 <b>4D Sentiment:</b> Editorial: {fds.linguistic_sentiment:+.2f} | "
+            f"Cash-Flow: {fds.fundamental_impact:+.2f} | "
+            f"Surprise: {fds.expectation_surprise:+.2f} ({escape_html(fds.surprise_verdict)}) | "
+            f"Price Imp: {fds.price_implication:+.2f}"
+        )
+    else:
+        lines.append(f"📊 <b>Sentiment:</b> {emoji_badge} | {gauge}")
 
     if getattr(analysis, "trend", None) is not None and analysis.trend is not None:
         lines.append(
@@ -497,7 +513,19 @@ def format_telegram_message(
         else None
     )
 
-    if counterarguments or invalidation:
+    adv = getattr(analysis, "adversarial_review", None)
+    if adv is not None:
+        lines.append("")
+        lines.append("⚔️ <b>ADVERSARIAL CHALLENGER & RISK DEFENSE:</b>")
+        if getattr(adv, "bearish_counter_thesis", None):
+            lines.append(f"• <b>Contrarian Counter-Thesis:</b> {escape_html(adv.bearish_counter_thesis)}")
+        if getattr(adv, "priced_in_risk", None):
+            lines.append(f"• <b>Priced-in Risk:</b> {escape_html(adv.priced_in_risk)}")
+        if getattr(adv, "macro_confounding_risk", None):
+            lines.append(f"• <b>Macro Risk:</b> {escape_html(adv.macro_confounding_risk)}")
+        if getattr(adv, "falsification_threshold", None):
+            lines.append(f"• <b>Invalidation Threshold:</b> {escape_html(adv.falsification_threshold)}")
+    elif counterarguments or invalidation:
         lines.append("")
         lines.append("⚖️ <b>RISK & INVALIDATION:</b>")
         if counterarguments:

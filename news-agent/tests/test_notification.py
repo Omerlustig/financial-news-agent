@@ -837,6 +837,59 @@ def test_format_telegram_message_with_sentiment_acceleration():
     assert "⚡ <b>Acceleration:</b> +0.45 (BULLISH_REVERSAL)" in msg
 
 
+def test_format_telegram_message_institutional_two_layer_gate_and_4d_sentiment():
+    """Verify telegram formatting renders Event Quality, Opportunity Score, 4D sentiment, and Adversarial Defense."""
+    from src.models import (
+        AdversarialReview,
+        FourDimensionalSentiment,
+        TwoLayerGateDecision,
+    )
+
+    article = RawArticle(
+        title="Nvidia announces breakthrough Blackwell deployment with Hyperscalers",
+        url="https://reuters.com/nvda-breakthrough",
+        source_name="Reuters",
+    )
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=9,
+        impact_grade=ImpactGrade.CRITICAL,
+        affected_tickers=["$NVDA"],
+        affected_sectors=["Semiconductors"],
+        summary="Nvidia deploys first wave of Blackwell GB200 racks to major cloud hyperscalers.",
+        catalyst_thesis="Accelerating revenue recognition and datacenter margin expansion.",
+        four_d_sentiment=FourDimensionalSentiment(
+            linguistic_sentiment=0.8,
+            fundamental_impact=0.7,
+            expectation_surprise=0.65,
+            price_implication=0.69,
+            surprise_verdict="BEAT",
+        ),
+        adversarial_review=AdversarialReview(
+            bearish_counter_thesis="Thermal management and liquid cooling yields could constrain volume ramp.",
+            priced_in_risk="Hyperscaler capex guidance was already raised last quarter.",
+            macro_confounding_risk="Broad semiconductor index correlation.",
+            falsification_threshold="Quarterly datacenter revenue growth falls below 15% sequentially.",
+            is_thesis_robust=True,
+        ),
+        two_layer_gate=TwoLayerGateDecision(
+            event_quality_score=9.2,
+            opportunity_score=8.4,
+            passes_event_quality_gate=True,
+            passes_opportunity_gate=True,
+            gate_verdict="ALERT",
+        ),
+    )
+
+    msg = format_telegram_message(article, analysis)
+
+    assert "🚨 <b>[OPPORTUNITY CANDIDATE | Event Quality: 9/10 | Opportunity: 8/10]</b>" in msg
+    assert "📊 <b>4D Sentiment:</b> Editorial: +0.80 | Cash-Flow: +0.70 | Surprise: +0.65 (BEAT) | Price Imp: +0.69" in msg
+    assert "⚔️ <b>ADVERSARIAL CHALLENGER & RISK DEFENSE:</b>" in msg
+    assert "• <b>Contrarian Counter-Thesis:</b> Thermal management and liquid cooling yields could constrain volume ramp." in msg
+    assert "• <b>Invalidation Threshold:</b> Quarterly datacenter revenue growth falls below 15% sequentially." in msg
+
+
 
 
 

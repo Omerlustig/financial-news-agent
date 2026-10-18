@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from src.models import MarketImpactAnalysis, RawArticle
+from src.models import EventLineageRecord, MarketImpactAnalysis, RawArticle
 
 
 class BaseStorage(ABC):
@@ -110,6 +110,31 @@ class BaseStorage(ABC):
         """Return aggregate sentiment trend summaries across all sectors in the past `hours`."""
         raise NotImplementedError
 
+    @abstractmethod
+    def record_event_lineage(self, event: EventLineageRecord) -> None:
+        """Persist or update an event lineage tracking record."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_event_lineage(self, event_id: str) -> Optional[EventLineageRecord]:
+        """Retrieve an event lineage record by unique event ID."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def find_existing_event(
+        self, ticker: str, title_tokens: List[str], window_hours: int = 48
+    ) -> Optional[EventLineageRecord]:
+        """Search for an existing event lineage within window_hours matching ticker and >= 2 title tokens."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def update_event_return(self, event_id: str, horizon: str, return_pct: float) -> None:
+        """Update forward realized return for a tracked event across specified horizon (e.g. 1d, 7d)."""
+        raise NotImplementedError
+
+    def list_event_lineage(self, ticker: Optional[str] = None, limit: int = 20) -> List[EventLineageRecord]:
+        """List recent event lineage tracking records, optionally filtered by primary ticker."""
+        return []
 
     def close(self) -> None:
         """Release storage connections or system resources."""

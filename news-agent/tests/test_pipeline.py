@@ -1362,6 +1362,161 @@ def test_pipeline_force_mode_bypasses_deduplication(tmp_path):
     assert mock_notifier.send_alert.call_count == 4
 
 
+def test_pipeline_six_stage_execution_cycle_records_lineage_and_evaluates_gates(tmp_path):
+    """Verify full 6-stage pipeline execution: lineage search, novelty, verification, technicals, two-layer gate, and lineage record."""
+    from src.models import (
+        AdversarialReview,
+        DirectionalStance,
+        FourDimensionalSentiment,
+        NoveltyState,
+        ProvenanceLevel,
+    )
+
+    db_file = str(tmp_path / "test_lineage_pipeline.db")
+    storage = SQLiteStorage(db_path=db_file)
+    mock_analyzer = MagicMock()
+    mock_notifier = MagicMock()
+    mock_notifier.send_alert.return_value = True
+
+    art = RawArticle(
+        title="Nvidia secures $10B enterprise AI cluster order",
+        url="https://reuters.com/nvda-10b-cluster",
+        source_name="Reuters",
+    )
+
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=9,
+        impact_grade=ImpactGrade.CRITICAL,
+        affected_tickers=["$NVDA"],
+        affected_sectors=["Semiconductors"],
+        directional_stance=DirectionalStance.BULLISH,
+        status=EventStatus.OPPORTUNITY_CANDIDATE,
+        four_d_sentiment=FourDimensionalSentiment(
+            linguistic_sentiment=0.8,
+            fundamental_impact=0.9,      # 0.9 * 3.5 = 3.15
+            expectation_surprise=0.8,    # 0.8 * 2.5 = 2.0
+            price_implication=0.85,
+            surprise_verdict="BEAT",
+        ),
+        adversarial_review=AdversarialReview(
+            bearish_counter_thesis="Supply constraints could delay recognized revenues.",
+            priced_in_risk="Unanticipated by market consensus.",
+            macro_confounding_risk="Pure company alpha.",
+            falsification_threshold="Order cancellation or shipment delay.",
+            is_thesis_robust=True,      # +2.0
+        ),
+        hard_gates=HardGates(
+            is_novel=True,
+            is_verified=True,
+            has_direct_exposure=True,
+            passes_all_gates=True,
+        ),
+        summary="Nvidia secures $10B enterprise order.",
+        catalyst_thesis="Immediate accretive revenue.",
+    )
+    mock_analyzer.analyze.return_value = analysis
+
+    pipeline = Pipeline(
+        storage=storage,
+        analyzer=mock_analyzer,
+        notifier=mock_notifier,
+        min_score=7,
+    )
+
+    summary = pipeline.process_articles([art])
+
+    assert summary.analyzed == 1
+    assert summary.alerted == 1
+    mock_notifier.send_alert.assert_called_once()
+
+    # Verify event lineage was persisted in SQLite
+    events = storage.list_event_lineage(ticker="$NVDA", limit=5)
+    assert len(events) == 1
+    rec = events[0]
+    assert rec.primary_ticker == "$NVDA"
+    assert rec.event_quality_score >= 8.0
+    assert rec.opportunity_score >= 7.0
+    assert rec.status == "ALERT"
+
+
+def test_pipeline_high_event_quality_low_opportunity_held_in_watchlist(tmp_path):
+    """Verify that FT contract cancellation on mega-cap yields high event quality but low opportunity, suppressing Telegram alert and persisting as WATCHLIST."""
+    from src.models import (
+        AdversarialReview,
+        DirectionalStance,
+        FourDimensionalSentiment,
+    )
+
+    db_file = str(tmp_path / "test_watchlist_suppress.db")
+    storage = SQLiteStorage(db_path=db_file)
+    mock_analyzer = MagicMock()
+    mock_notifier = MagicMock()
+    mock_notifier.send_alert.return_value = True
+
+    art = RawArticle(
+        title="Microsoft pulls plug on Nscale data centre deal",
+        url="https://ft.com/msft-nscale-deal",
+        source_name="Financial Times",
+    )
+
+    # Low fundamental cash flow impact on Microsoft (<0.15) with fragile short thesis
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=7,
+        impact_grade=ImpactGrade.HIGH,
+        affected_tickers=["$MSFT", "$NVDA"],
+        affected_sectors=["Cloud Computing", "Semiconductors"],
+        directional_stance=DirectionalStance.BEARISH,
+        status=EventStatus.OPPORTUNITY_CANDIDATE,
+        four_d_sentiment=FourDimensionalSentiment(
+            linguistic_sentiment=-0.5,
+            fundamental_impact=-0.15,   # Minimal cash flow dent on $250B revenue: 0.15 * 3.5 = 0.525
+            expectation_surprise=-0.2,  # Modest surprise: 0.2 * 2.5 = 0.5
+            price_implication=-0.2,
+            surprise_verdict="MISS",
+        ),
+        adversarial_review=AdversarialReview(
+            bearish_counter_thesis="Canceling third-party lease cuts external commitments and reallocates capex internally.",
+            priced_in_risk="Enterprise datacenter re-locations are routine site-specific optimizations.",
+            macro_confounding_risk="Broad tech consolidation.",
+            falsification_threshold="Total Azure capex guidance reduced by >5%.",
+            is_thesis_robust=False,     # -2.0 fragile short thesis penalty!
+        ),
+        hard_gates=HardGates(
+            is_novel=True,
+            is_verified=True,
+            has_direct_exposure=True,
+            passes_all_gates=True,
+        ),
+        summary="Microsoft terminates UK lease with Nscale.",
+        catalyst_thesis="Third-party hosting pullback.",
+    )
+    mock_analyzer.analyze.return_value = analysis
+
+    pipeline = Pipeline(
+        storage=storage,
+        analyzer=mock_analyzer,
+        notifier=mock_notifier,
+        min_score=8,
+    )
+
+    summary = pipeline.process_articles([art])
+
+    # Article was analyzed, but OPPORTUNITY gate failed (< 6.0), so Telegram alert was SUPPRESSED!
+    assert summary.analyzed == 1
+    assert summary.alerted == 0
+    mock_notifier.send_alert.assert_not_called()
+
+    # Verify event lineage was persisted with WATCHLIST status
+    events = storage.list_event_lineage(ticker="$MSFT", limit=5)
+    assert len(events) == 1
+    rec = events[0]
+    assert rec.event_quality_score >= 8.0  # FT confirmed
+    assert rec.opportunity_score < 6.0     # Low actionable edge
+    assert rec.status == "WATCHLIST"
+
+
 
 
 

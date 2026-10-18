@@ -197,6 +197,22 @@ Evaluate domain-specific financial sentiment across headline, corporate disclosu
 - Derive probabilistic distribution: `positive` (0.0 to 1.0), `negative` (0.0 to 1.0), `neutral` (0.0 to 1.0), and `confidence` (0.0 to 1.0).
 - Extreme events (accounting restatement / Item 4.02, fraud, bankruptcy, default) MUST be scored <= -0.8 ("VERY_BEARISH").
 
+4D SENTIMENT DECOMPOSITION & SURPRISE METRICS:
+Disentangle editorial tone from fundamental cash-flow alteration and market expectation surprise:
+- `linguistic_sentiment`: Editorial lexical valence (-1.0 to 1.0).
+- `fundamental_impact`: Direct cash-flow alteration (-1.0 to 1.0, e.g. accretive: record free cash flow, margin expansion, guidance raise; destructive: margin compression, contract termination, impairment).
+- `expectation_surprise`: Deviation from consensus expectations (-1.0 to 1.0, e.g. beat: surprises to upside, unexpected surge; miss: below consensus, profit warning; in-line: meets expectations).
+- `price_implication`: Net directional market price response (-1.0 to 1.0).
+- `surprise_verdict`: "BEAT" | "MISS" | "IN_LINE" | "UNEXPECTED_SHOCK".
+
+ADVERSARIAL SELF-CHALLENGER & FALSIFICATION AUDIT:
+Force contrarian argumentation against the primary thesis:
+- `bearish_counter_thesis`: Strongest contrarian argument or counter-thesis challenging the consensus.
+- `priced_in_risk`: Audit whether catalyst is already discounted, leaked, or priced in ("sell the news" dynamic).
+- `macro_confounding_risk`: Audit whether broader macro beta (yield curve shifts, energy spikes, broad market selloffs) explains price action rather than idiosyncratic alpha.
+- `falsification_threshold`: Explicit, measurable financial metric or regulatory condition that disproves or invalidates the thesis.
+- `is_thesis_robust`: True if the investment thesis withstands the adversarial challenge.
+
 COMPLIANCE & NEWS-ONLY BOUNDARY:
 - Outputs are news-derived hypotheses only.
 - Never state that a stock is mispriced, never identify entry points, price targets, or trading recommendations without approved market data.
@@ -237,6 +253,20 @@ Respond with pure JSON conforming strictly to this schema:
     "negative": float (0.0 to 1.0),
     "neutral": float (0.0 to 1.0),
     "confidence": float (0.0 to 1.0)
+  },
+  "four_d_sentiment": {
+    "linguistic_sentiment": float (-1.0 to 1.0),
+    "fundamental_impact": float (-1.0 to 1.0),
+    "expectation_surprise": float (-1.0 to 1.0),
+    "price_implication": float (-1.0 to 1.0),
+    "surprise_verdict": "BEAT" | "MISS" | "IN_LINE" | "UNEXPECTED_SHOCK"
+  },
+  "adversarial_review": {
+    "bearish_counter_thesis": "Strongest counter-argument or bearish thesis challenging the consensus.",
+    "priced_in_risk": "Evaluation of whether the catalyst is already reflected in valuation / expectations.",
+    "macro_confounding_risk": "Risk of macro beta or market-wide confounding drivers instead of true alpha.",
+    "falsification_threshold": "Concrete, measurable data point or event that invalidates the investment thesis.",
+    "is_thesis_robust": boolean
   },
   "sec_filing_item": "Item 1.01: Entry into Material Definitive Agreement (M&A / Partnership)" | null,
   "recommendation": "Concise 1-sentence actionable analyst recommendation or monitoring posture (e.g. 'Prioritize long exposure on $NVDA/$TSM on dips; hedge downside risk via $SMH puts; avoid $INTC until next quarter').",
@@ -312,6 +342,8 @@ EVALUATION INSTRUCTIONS:
 6. Multi-language: For Hebrew headlines/content (e.g., Globes, Calcalist, TheMarker, MAYA, TASE), accurately parse Israeli entities and normalize all JSON outputs to English.
 7. Regulatory Taxonomy: If SEC 8-K filing items or MAYA disclosure categories are present or detected above, calibrate baseline severity accordingly and explicitly set 'sec_filing_item'.
 8. Financial Sentiment: Evaluate domain financial tone (Loughran-McDonald lexicon and catalyst polarity) and populate 'sentiment' with calibrated score (-1.0 to 1.0), categorical label, positive/negative/neutral probabilities, and confidence.
+9. 4D Sentiment Decomposition: Evaluate editorial tone vs fundamental cash flow impact vs expectation surprise, calculate directional price implication, and assign surprise verdict (BEAT, MISS, IN_LINE, UNEXPECTED_SHOCK) in 'four_d_sentiment'.
+10. Adversarial Challenge & Falsification: Formulate a rigorous contrarian counter-thesis, audit priced-in and macro confounding risks, state an explicit falsification threshold, and verify thesis robustness in 'adversarial_review'.
 
 Return ONLY valid JSON adhering strictly to the required MarketImpactAnalysis schema.
 """

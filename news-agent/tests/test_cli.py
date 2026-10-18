@@ -168,3 +168,47 @@ telegram:
         assert "Scan Cycle Summary" in result.stdout
         assert "Sector News Sentiment Summary" in result.stdout
         assert "Semiconductors" in result.stdout
+
+
+def test_history_command_empty(temp_cli_db):
+    """Verify history command informs user when no event lineage records exist."""
+    _, db_path = temp_cli_db
+    runner = CliRunner()
+    result = runner.invoke(app, ["history", "--db", db_path])
+
+    assert result.exit_code == 0
+    assert "No event lineage records found" in result.stdout
+
+
+def test_history_command_populated(temp_cli_db):
+    """Verify history command renders table of event lineage records."""
+    from src.models import EventLineageRecord
+
+    storage, db_path = temp_cli_db
+    now = datetime.now(timezone.utc)
+
+    record = EventLineageRecord(
+        event_id="evt_test_12345",
+        title="Nvidia Blackwell racks begin mass delivery",
+        primary_ticker="$NVDA",
+        first_seen=now,
+        last_updated=now,
+        source_count=3,
+        all_sources=["Reuters", "Bloomberg", "FT"],
+        event_quality_score=9.0,
+        opportunity_score=8.5,
+        status="ALERT",
+        initial_price=125.50,
+    )
+    storage.record_event_lineage(record)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["history", "--ticker", "$NVDA", "--db", db_path])
+
+    assert result.exit_code == 0
+    assert "Structured Event Lineage History" in result.stdout
+    assert "$NVDA" in result.stdout
+    assert "Nvidia" in result.stdout
+    assert "ALERT" in result.stdout
+    assert "125" in result.stdout
+

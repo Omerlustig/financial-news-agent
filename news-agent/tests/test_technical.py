@@ -131,3 +131,144 @@ def test_format_telegram_message_with_technicals():
     assert "$142.50" in msg
     assert "Above 50-SMA $132.00" in msg
     assert "Bullish confluence: Technical momentum confirms catalyst." in msg
+
+
+def test_calculate_technical_confluence_bullish():
+    engine = TradingViewEngine()
+
+    # 1. Full Bullish Confluence: Strong Buy, RSI 58.0, Above SMA50 & SMA200, Golden Cross
+    score, summary, flags = engine.calculate_technical_confluence(
+        stance="BULLISH",
+        rec="STRONG_BUY",
+        rsi=58.0,
+        close=150.0,
+        sma50=140.0,
+        sma200=120.0,
+    )
+    assert score == 2.0
+    assert "Bullish confluence" in summary
+    assert flags["is_overbought"] is False
+    assert flags["is_oversold"] is False
+    assert flags["golden_cross"] is True
+    assert flags["death_cross"] is False
+    assert flags["above_sma50"] is True
+    assert flags["above_sma200"] is True
+
+    # 2. Moderate Bullish Confluence: Buy, Above SMA50 but not above SMA200
+    score_mod, summary_mod, flags_mod = engine.calculate_technical_confluence(
+        stance="BULLISH",
+        rec="BUY",
+        rsi=62.0,
+        close=135.0,
+        sma50=130.0,
+        sma200=140.0,
+    )
+    assert score_mod == 1.5
+    assert "Bullish confluence" in summary_mod
+    assert flags_mod["above_sma50"] is True
+    assert flags_mod["above_sma200"] is False
+
+    # 3. Severe Overbought Risk: RSI >= 75
+    score_ob, summary_ob, flags_ob = engine.calculate_technical_confluence(
+        stance="BULLISH",
+        rec="STRONG_BUY",
+        rsi=78.5,
+        close=160.0,
+        sma50=140.0,
+        sma200=120.0,
+    )
+    assert score_ob == -1.0
+    assert "Overbought warning" in summary_ob
+    assert flags_ob["is_overbought"] is True
+
+
+def test_calculate_technical_confluence_bearish():
+    engine = TradingViewEngine()
+
+    # 1. Full Bearish Confluence: Strong Sell, RSI 40.0, Below SMA50 & SMA200, Death Cross
+    score, summary, flags = engine.calculate_technical_confluence(
+        stance="BEARISH",
+        rec="STRONG_SELL",
+        rsi=40.0,
+        close=95.0,
+        sma50=110.0,
+        sma200=130.0,
+    )
+    assert score == 2.0
+    assert "Bearish confluence" in summary
+    assert flags["is_oversold"] is False
+    assert flags["death_cross"] is True
+    assert flags["golden_cross"] is False
+    assert flags["above_sma50"] is False
+    assert flags["above_sma200"] is False
+
+    # 2. Moderate Bearish Confluence: Sell, Below SMA50
+    score_mod, summary_mod, flags_mod = engine.calculate_technical_confluence(
+        stance="BEARISH",
+        rec="SELL",
+        rsi=38.0,
+        close=105.0,
+        sma50=110.0,
+        sma200=100.0,
+    )
+    assert score_mod == 1.5
+    assert "Bearish confluence" in summary_mod
+
+    # 3. Extreme Oversold Bounce Risk: RSI <= 25
+    score_os, summary_os, flags_os = engine.calculate_technical_confluence(
+        stance="BEARISH",
+        rec="STRONG_SELL",
+        rsi=21.0,
+        close=85.0,
+        sma50=110.0,
+        sma200=130.0,
+    )
+    assert score_os == -1.0
+    assert "Oversold bounce risk" in summary_os
+    assert flags_os["is_oversold"] is True
+
+
+def test_calculate_technical_confluence_divergences():
+    engine = TradingViewEngine()
+
+    # Bullish news vs Strong Sell technicals
+    score_div_bull, sum_div_bull, _ = engine.calculate_technical_confluence(
+        stance="BULLISH",
+        rec="STRONG_SELL",
+        rsi=45.0,
+        close=100.0,
+        sma50=110.0,
+        sma200=120.0,
+    )
+    assert score_div_bull == -1.5
+    assert "Divergence" in sum_div_bull
+
+    # Bearish news vs Strong Buy technicals
+    score_div_bear, sum_div_bear, _ = engine.calculate_technical_confluence(
+        stance="BEARISH",
+        rec="STRONG_BUY",
+        rsi=65.0,
+        close=150.0,
+        sma50=140.0,
+        sma200=130.0,
+    )
+    assert score_div_bear == -1.5
+    assert "Divergence" in sum_div_bear
+
+
+def test_calculate_technical_confluence_neutral():
+    engine = TradingViewEngine()
+
+    score, summary, flags = engine.calculate_technical_confluence(
+        stance="NEUTRAL",
+        rec="NEUTRAL",
+        rsi=50.0,
+        close=100.0,
+        sma50=100.0,
+        sma200=100.0,
+    )
+    assert score == 0.0
+    assert "Neutral technical setup" in summary
+    assert flags["golden_cross"] is False
+    assert flags["death_cross"] is False
+

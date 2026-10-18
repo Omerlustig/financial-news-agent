@@ -1,11 +1,12 @@
 import json
+import re
 import sqlite3
 import threading
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from src.models import MarketImpactAnalysis, RawArticle
+from src.models import EventLineageRecord, MarketImpactAnalysis, RawArticle
 from src.storage.base import BaseStorage
 
 
@@ -123,6 +124,25 @@ class SQLiteStorage(BaseStorage):
                     );
                     """
                 )
+                self._conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS event_lineage (
+                        event_id TEXT PRIMARY KEY,
+                        title TEXT NOT NULL,
+                        primary_ticker TEXT,
+                        first_seen TIMESTAMP NOT NULL,
+                        last_updated TIMESTAMP NOT NULL,
+                        source_count INTEGER DEFAULT 1,
+                        all_sources TEXT,
+                        event_quality_score REAL DEFAULT 0.0,
+                        opportunity_score REAL DEFAULT 0.0,
+                        status TEXT DEFAULT 'WATCHLIST',
+                        initial_price REAL,
+                        subsequent_return_1d REAL,
+                        subsequent_return_7d REAL
+                    );
+                    """
+                )
                 # Migration safety check: ensure all newly specified columns exist in existing databases
                 cursor = self._conn.execute("PRAGMA table_info(articles);")
                 existing_cols = {row["name"] if isinstance(row, sqlite3.Row) else row[1] for row in cursor.fetchall()}
@@ -160,6 +180,10 @@ class SQLiteStorage(BaseStorage):
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_metrics_created_at ON llm_metrics(created_at);")
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_metrics_content_hash ON llm_metrics(content_hash);")
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_metrics_model_name ON llm_metrics(model_name);")
+                self._conn.execute("CREATE INDEX IF NOT EXISTS idx_event_lineage_primary_ticker ON event_lineage(primary_ticker);")
+                self._conn.execute("CREATE INDEX IF NOT EXISTS idx_event_lineage_first_seen ON event_lineage(first_seen);")
+                self._conn.execute("CREATE INDEX IF NOT EXISTS idx_event_lineage_last_updated ON event_lineage(last_updated);")
+                self._conn.execute("CREATE INDEX IF NOT EXISTS idx_event_lineage_status ON event_lineage(status);")
 
     def is_article_seen(self, content_hash: str) -> bool:
         """Check whether an article with the given content hash has already been stored."""
@@ -913,6 +937,261 @@ class SQLiteStorage(BaseStorage):
                     "sentiment_label": label,
                 })
             return results
+
+    def _row_to_event_lineage(self, row: Any) -> EventLineageRecord:
+        """Convert a database row into an EventLineageRecord instance."""
+        d = dict(row) if isinstance(row, sqlite3.Row) else {
+            "event_id": row[0],
+            "title": row[1],
+            "primary_ticker": row[2],
+            "first_seen": row[3],
+            "last_updated": row[4],
+            "source_count": row[5],
+            "all_sources": row[6],
+            "event_quality_score": row[7],
+            "opportunity_score": row[8],
+            "status": row[9],
+            "initial_price": row[10],
+            "subsequent_return_1d": row[11],
+            "subsequent_return_7d": row[12],
+        }
+        all_sources = d.get("all_sources")
+        if isinstance(all_sources, str):
+            try:
+                all_sources = json.loads(all_sources)
+            except Exception:
+                all_sources = [s.strip() for s in all_sources.split(",") if s.strip()]
+        d["all_sources"] = all_sources or []
+        return EventLineageRecord(**d)
+
+    def record_event_lineage(self, event: EventLineageRecord) -> None:
+        """Persist or update an event lineage tracking record."""
+        if not event or not event.event_id:
+            return
+
+        first_seen_str = (
+            event.first_seen.isoformat()
+            if isinstance(event.first_seen, datetime)
+            else str(event.first_seen)
+        )
+        last_updated_str = (
+            event.last_updated.isoformat()
+            if isinstance(event.last_updated, datetime)
+            else str(event.last_updated)
+        )
+        sources_json = json.dumps(event.all_sources) if event.all_sources else "[]"
+        cleaned_ticker = event.primary_ticker.strip().upper() if event.primary_ticker else None
+
+        sql = """
+        INSERT INTO event_lineage (
+            event_id,
+            title,
+            primary_ticker,
+            first_seen,
+            last_updated,
+            source_count,
+            all_sources,
+            event_quality_score,
+            opportunity_score,
+            status,
+            initial_price,
+            subsequent_return_1d,
+            subsequent_return_7d
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(event_id) DO UPDATE SET
+            title = excluded.title,
+            primary_ticker = COALESCE(excluded.primary_ticker, event_lineage.primary_ticker),
+            last_updated = excluded.last_updated,
+            source_count = excluded.source_count,
+            all_sources = excluded.all_sources,
+            event_quality_score = excluded.event_quality_score,
+            opportunity_score = excluded.opportunity_score,
+            status = excluded.status,
+            initial_price = COALESCE(excluded.initial_price, event_lineage.initial_price),
+            subsequent_return_1d = COALESCE(excluded.subsequent_return_1d, event_lineage.subsequent_return_1d),
+            subsequent_return_7d = COALESCE(excluded.subsequent_return_7d, event_lineage.subsequent_return_7d);
+        """
+        with self._lock:
+            if self._conn is None:
+                raise RuntimeError("Database connection is closed.")
+            with self._conn:
+                self._conn.execute(
+                    sql,
+                    (
+                        event.event_id,
+                        event.title,
+                        cleaned_ticker,
+                        first_seen_str,
+                        last_updated_str,
+                        int(event.source_count),
+                        sources_json,
+                        float(event.event_quality_score),
+                        float(event.opportunity_score),
+                        str(event.status),
+                        float(event.initial_price) if event.initial_price is not None else None,
+                        float(event.subsequent_return_1d) if event.subsequent_return_1d is not None else None,
+                        float(event.subsequent_return_7d) if event.subsequent_return_7d is not None else None,
+                    ),
+                )
+
+    def get_event_lineage(self, event_id: str) -> Optional[EventLineageRecord]:
+        """Retrieve an event lineage record by unique event ID."""
+        if not event_id:
+            return None
+        sql = """
+        SELECT
+            event_id,
+            title,
+            primary_ticker,
+            first_seen,
+            last_updated,
+            source_count,
+            all_sources,
+            event_quality_score,
+            opportunity_score,
+            status,
+            initial_price,
+            subsequent_return_1d,
+            subsequent_return_7d
+        FROM event_lineage
+        WHERE event_id = ?;
+        """
+        with self._lock:
+            if self._conn is None:
+                raise RuntimeError("Database connection is closed.")
+            cursor = self._conn.cursor()
+            cursor.execute(sql, (event_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            return self._row_to_event_lineage(row)
+
+    def find_existing_event(
+        self, ticker: str, title_tokens: List[str], window_hours: int = 48
+    ) -> Optional[EventLineageRecord]:
+        """Search for an existing event lineage within window_hours matching ticker and >= 2 title tokens."""
+        if not ticker or not title_tokens:
+            return None
+
+        cleaned_ticker = str(ticker).strip().upper()
+        candidates = [cleaned_ticker]
+        if cleaned_ticker.startswith("$"):
+            candidates.append(cleaned_ticker[1:])
+        else:
+            candidates.append(f"${cleaned_ticker}")
+
+        # Extract normalized words from input tokens
+        input_token_set = set()
+        for t in title_tokens:
+            words = re.findall(r"\b\w+\b", str(t).lower())
+            input_token_set.update(words)
+
+        if len(input_token_set) < 2:
+            return None
+
+        cutoff_dt = datetime.now(timezone.utc) - timedelta(hours=window_hours)
+
+        sql = """
+        SELECT
+            event_id,
+            title,
+            primary_ticker,
+            first_seen,
+            last_updated,
+            source_count,
+            all_sources,
+            event_quality_score,
+            opportunity_score,
+            status,
+            initial_price,
+            subsequent_return_1d,
+            subsequent_return_7d
+        FROM event_lineage
+        WHERE (primary_ticker = ? OR primary_ticker = ?)
+        ORDER BY last_updated DESC;
+        """
+        with self._lock:
+            if self._conn is None:
+                raise RuntimeError("Database connection is closed.")
+            cursor = self._conn.cursor()
+            cursor.execute(sql, (candidates[0], candidates[1]))
+            rows = cursor.fetchall()
+
+        for row in rows:
+            record = self._row_to_event_lineage(row)
+
+            # Check time window against last_updated or first_seen
+            rec_dt = record.last_updated or record.first_seen
+            if rec_dt:
+                rec_utc = rec_dt if rec_dt.tzinfo else rec_dt.replace(tzinfo=timezone.utc)
+                if rec_utc < cutoff_dt:
+                    continue
+
+            # Check token overlap (>= 2 tokens)
+            event_tokens = set(re.findall(r"\b\w+\b", record.title.lower()))
+            overlap = input_token_set.intersection(event_tokens)
+            if len(overlap) >= 2:
+                return record
+
+        return None
+
+    def update_event_return(self, event_id: str, horizon: str, return_pct: float) -> None:
+        """Update forward realized return for a tracked event across specified horizon (e.g. 1d, 7d)."""
+        if not event_id or not horizon:
+            return
+
+        norm_h = str(horizon).lower().strip().replace("-", "_")
+        if "1d" in norm_h or "1_day" in norm_h:
+            col = "subsequent_return_1d"
+        elif "7d" in norm_h or "7_day" in norm_h:
+            col = "subsequent_return_7d"
+        else:
+            raise ValueError(f"Unsupported return horizon: {horizon}. Expected '1d' or '7d'.")
+
+        now_str = datetime.now(timezone.utc).isoformat()
+        sql = f"""
+        UPDATE event_lineage
+        SET {col} = ?, last_updated = ?
+        WHERE event_id = ?;
+        """
+        with self._lock:
+            if self._conn is None:
+                raise RuntimeError("Database connection is closed.")
+            with self._conn:
+                self._conn.execute(sql, (float(return_pct), now_str, event_id))
+
+    def list_event_lineage(self, ticker: Optional[str] = None, limit: int = 20) -> List[EventLineageRecord]:
+        """List recent event lineage tracking records, optionally filtered by primary ticker."""
+        with self._lock:
+            if self._conn is None:
+                raise RuntimeError("Database connection is closed.")
+            cursor = self._conn.cursor()
+            if ticker:
+                clean_ticker = ticker.strip().upper()
+                if not clean_ticker.startswith("$"):
+                    clean_ticker = f"${clean_ticker}"
+                sql = """
+                SELECT event_id, title, primary_ticker, first_seen, last_updated,
+                       source_count, all_sources, event_quality_score, opportunity_score,
+                       status, initial_price, subsequent_return_1d, subsequent_return_7d
+                FROM event_lineage
+                WHERE primary_ticker = ?
+                ORDER BY last_updated DESC
+                LIMIT ?;
+                """
+                cursor.execute(sql, (clean_ticker, limit))
+            else:
+                sql = """
+                SELECT event_id, title, primary_ticker, first_seen, last_updated,
+                       source_count, all_sources, event_quality_score, opportunity_score,
+                       status, initial_price, subsequent_return_1d, subsequent_return_7d
+                FROM event_lineage
+                ORDER BY last_updated DESC
+                LIMIT ?;
+                """
+                cursor.execute(sql, (limit,))
+            rows = cursor.fetchall()
+            return [self._row_to_event_lineage(r) for r in rows]
 
     def close(self) -> None:
 

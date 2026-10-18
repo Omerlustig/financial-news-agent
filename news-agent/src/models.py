@@ -181,6 +181,65 @@ class TrendVerdict(str, Enum):
         return super()._missing_(value)
 
 
+class StatementType(str, Enum):
+    """Categorical classification of financial statement verification rigor."""
+    VERIFIED_FACT = "VERIFIED_FACT"
+    ATTRIBUTED_CLAIM = "ATTRIBUTED_CLAIM"
+    ANALYST_OPINION = "ANALYST_OPINION"
+    ANONYMOUS_RUMOR = "ANONYMOUS_RUMOR"
+
+    def __str__(self) -> str:
+        return self.value
+
+    @classmethod
+    def _missing_(cls, value: object) -> Any:
+        if isinstance(value, str):
+            normalized = value.strip().upper().replace(" ", "_")
+            for member in cls:
+                if member.value == normalized:
+                    return member
+        return super()._missing_(value)
+
+
+class ProvenanceLevel(str, Enum):
+    """Hierarchical tiering of information source authority and verification depth."""
+    PRIMARY_OFFICIAL = "PRIMARY_OFFICIAL"
+    TIER1_FINANCIAL = "TIER1_FINANCIAL"
+    COMMERCIAL_NEWS = "COMMERCIAL_NEWS"
+    UNVERIFIED_BLOG = "UNVERIFIED_BLOG"
+
+    def __str__(self) -> str:
+        return self.value
+
+    @classmethod
+    def _missing_(cls, value: object) -> Any:
+        if isinstance(value, str):
+            normalized = value.strip().upper().replace(" ", "_")
+            for member in cls:
+                if member.value == normalized:
+                    return member
+        return super()._missing_(value)
+
+
+class NoveltyState(str, Enum):
+    """Tri-state novelty and market expectation gap classification."""
+    GENUINE_SURPRISE = "GENUINE_SURPRISE"
+    IN_LINE_CONFIRMATION = "IN_LINE_CONFIRMATION"
+    PRICED_IN_OR_RECYCLED = "PRICED_IN_OR_RECYCLED"
+
+    def __str__(self) -> str:
+        return self.value
+
+    @classmethod
+    def _missing_(cls, value: object) -> Any:
+        if isinstance(value, str):
+            normalized = value.strip().upper().replace(" ", "_")
+            for member in cls:
+                if member.value == normalized:
+                    return member
+        return super()._missing_(value)
+
+
 
 import urllib.parse
 
@@ -438,6 +497,167 @@ class TechnicalIndicatorSummary(BaseModel):
     confluence_note: Optional[str] = Field(default=None, description="Confluence check comparing news stance with technical setup")
 
 
+class FourDimensionalSentiment(BaseModel):
+    """Decomposed 4-dimensional sentiment and fundamental surprise metrics."""
+    linguistic_sentiment: float = Field(
+        default=0.0,
+        ge=-1.0,
+        le=1.0,
+        description="Editorial and linguistic tone (-1.0 bearish to +1.0 bullish)."
+    )
+    fundamental_impact: float = Field(
+        default=0.0,
+        ge=-1.0,
+        le=1.0,
+        description="Direct impact on fundamental cash flows / earnings (-1.0 damage to +1.0 accretive)."
+    )
+    expectation_surprise: float = Field(
+        default=0.0,
+        ge=-1.0,
+        le=1.0,
+        description="Deviation from consensus expectations / guidance (-1.0 miss to +1.0 beat)."
+    )
+    price_implication: float = Field(
+        default=0.0,
+        ge=-1.0,
+        le=1.0,
+        description="Net directional price implication (-1.0 severe drop to +1.0 surge)."
+    )
+    surprise_verdict: str = Field(
+        default="IN_LINE",
+        description="Expectation gap verdict: BEAT, MISS, IN_LINE, UNEXPECTED_SHOCK."
+    )
+
+    @field_validator("linguistic_sentiment", "fundamental_impact", "expectation_surprise", "price_implication", mode="before")
+    @classmethod
+    def clamp_and_float(cls, v: Any) -> float:
+        if v is None:
+            return 0.0
+        val = float(v)
+        return max(-1.0, min(1.0, val))
+
+    @field_validator("surprise_verdict", mode="before")
+    @classmethod
+    def normalize_surprise_verdict(cls, v: Any) -> str:
+        if v is None:
+            return "IN_LINE"
+        return str(v).strip().upper()
+
+
+class AdversarialReview(BaseModel):
+    """Adversarial stress-test and falsification audit for news-derived thesis."""
+    bearish_counter_thesis: str = Field(
+        ...,
+        description="Strongest counter-argument or bearish thesis challenging the consensus."
+    )
+    priced_in_risk: str = Field(
+        ...,
+        description="Evaluation of whether the catalyst is already reflected in valuation / expectations."
+    )
+    macro_confounding_risk: str = Field(
+        ...,
+        description="Risk of macro beta or market-wide confounding drivers instead of true alpha."
+    )
+    falsification_threshold: str = Field(
+        ...,
+        description="Concrete, measurable data point or event that invalidates the investment thesis."
+    )
+    is_thesis_robust: bool = Field(
+        default=True,
+        description="True if original thesis withstands adversarial audit."
+    )
+
+
+class TwoLayerGateDecision(BaseModel):
+    """Decoupled quality and opportunity gating decision."""
+    event_quality_score: float = Field(
+        default=5.0,
+        ge=0.0,
+        le=10.0,
+        description="Evidence rigor, provenance, and corroboration score (0.0 to 10.0)."
+    )
+    opportunity_score: float = Field(
+        default=5.0,
+        ge=0.0,
+        le=10.0,
+        description="Asymmetric upside/downside opportunity score (0.0 to 10.0)."
+    )
+    passes_event_quality_gate: bool = Field(
+        default=False,
+        description="True if event quality score meets high-conviction threshold (e.g. >= 8.0)."
+    )
+    passes_opportunity_gate: bool = Field(
+        default=False,
+        description="True if opportunity score meets actionable threshold (e.g. >= 8.0)."
+    )
+    gate_verdict: str = Field(
+        default="WATCHLIST",
+        description="Decision gate verdict: ALERT, WATCHLIST, REJECT."
+    )
+    rejection_reason: Optional[str] = Field(
+        default=None,
+        description="Detailed reason if rejected or held back from alerting."
+    )
+
+    @field_validator("event_quality_score", "opportunity_score", mode="before")
+    @classmethod
+    def clamp_scores(cls, v: Any) -> float:
+        if v is None:
+            return 5.0
+        val = float(v)
+        return max(0.0, min(10.0, val))
+
+    @field_validator("gate_verdict", mode="before")
+    @classmethod
+    def normalize_verdict(cls, v: Any) -> str:
+        if v is None:
+            return "WATCHLIST"
+        return str(v).strip().upper()
+
+
+class EventLineageRecord(BaseModel):
+    """Persistent tracking record maintaining historical catalyst lineage and forward performance."""
+    event_id: str = Field(..., description="Unique event lineage cluster identifier.")
+    title: str = Field(..., description="Canonical representative event headline.")
+    primary_ticker: Optional[str] = Field(default=None, description="Primary impacted ticker symbol.")
+    first_seen: datetime = Field(default_factory=datetime.utcnow, description="UTC timestamp when first article for event was ingested.")
+    last_updated: datetime = Field(default_factory=datetime.utcnow, description="UTC timestamp of most recent update / corroboration.")
+    source_count: int = Field(default=1, description="Count of distinct sources reporting on this event.")
+    all_sources: List[str] = Field(default_factory=list, description="List of source / publisher names covering this event.")
+    event_quality_score: float = Field(default=0.0, description="Evaluated factual quality and evidence score.")
+    opportunity_score: float = Field(default=0.0, description="Evaluated trade opportunity and asymmetry score.")
+    status: str = Field(default="WATCHLIST", description="Workflow status (ALERT, WATCHLIST, REJECT).")
+    initial_price: Optional[float] = Field(default=None, description="Asset price at the time of initial event detection.")
+    subsequent_return_1d: Optional[float] = Field(default=None, description="Realized forward asset percentage return over 1 trading day.")
+    subsequent_return_7d: Optional[float] = Field(default=None, description="Realized forward asset percentage return over 7 trading days.")
+
+    @field_validator("primary_ticker", mode="before")
+    @classmethod
+    def normalize_primary_ticker(cls, v: Any) -> Optional[str]:
+        if not v:
+            return None
+        cleaned = str(v).strip().upper()
+        if cleaned and not cleaned.startswith("$"):
+            cleaned = f"${cleaned}"
+        return cleaned
+
+    @field_validator("all_sources", mode="before")
+    @classmethod
+    def normalize_all_sources(cls, v: Any) -> List[str]:
+        if not v:
+            return []
+        if isinstance(v, str):
+            try:
+                parsed = json.loads(v)
+                if isinstance(parsed, list):
+                    return [str(s).strip() for s in parsed if str(s).strip()]
+            except Exception:
+                return [s.strip() for s in v.split(",") if s.strip()]
+        if isinstance(v, (list, set, tuple)):
+            return [str(s).strip() for s in v if str(s).strip()]
+        return [str(v).strip()]
+
+
 class MarketImpactAnalysis(BaseModel):
     """Institutional financial analyst reasoning and scoring output."""
     is_market_moving: bool = Field(
@@ -550,6 +770,83 @@ class MarketImpactAnalysis(BaseModel):
         default=True,
         description="True if analysis was successfully generated by an LLM; False if generated by fallback rule engine upon error/rate limit."
     )
+    four_d_sentiment: Optional[FourDimensionalSentiment] = Field(
+        default=None,
+        description="Decomposed 4-dimensional sentiment (linguistic, fundamental, expectation surprise, price implication)."
+    )
+    adversarial_review: Optional[AdversarialReview] = Field(
+        default=None,
+        description="Adversarial stress-test, counter-thesis, priced-in risk, and falsification threshold."
+    )
+    two_layer_gate: Optional[TwoLayerGateDecision] = Field(
+        default=None,
+        description="Decoupled two-layer gating evaluation (event quality gate and opportunity gate)."
+    )
+    novelty_state: Optional[NoveltyState] = Field(
+        default=None,
+        description="Catalyst novelty classification (GENUINE_SURPRISE, IN_LINE_CONFIRMATION, PRICED_IN_OR_RECYCLED)."
+    )
+    provenance_level: Optional[ProvenanceLevel] = Field(
+        default=None,
+        description="Source provenance tier (PRIMARY_OFFICIAL, TIER1_FINANCIAL, COMMERCIAL_NEWS, UNVERIFIED_BLOG)."
+    )
+    event_id: Optional[str] = Field(
+        default=None,
+        description="Linked persistent event lineage identifier."
+    )
+
+    @field_validator("four_d_sentiment", mode="before")
+    @classmethod
+    def normalize_four_d_sentiment(cls, v: Any) -> Optional[FourDimensionalSentiment]:
+        if v is None:
+            return None
+        if isinstance(v, dict):
+            return FourDimensionalSentiment(**v)
+        return v
+
+    @field_validator("adversarial_review", mode="before")
+    @classmethod
+    def normalize_adversarial_review(cls, v: Any) -> Optional[AdversarialReview]:
+        if v is None:
+            return None
+        if isinstance(v, dict):
+            return AdversarialReview(**v)
+        return v
+
+    @field_validator("two_layer_gate", mode="before")
+    @classmethod
+    def normalize_two_layer_gate(cls, v: Any) -> Optional[TwoLayerGateDecision]:
+        if v is None:
+            return None
+        if isinstance(v, dict):
+            return TwoLayerGateDecision(**v)
+        return v
+
+    @field_validator("novelty_state", mode="before")
+    @classmethod
+    def normalize_novelty_state(cls, v: Any) -> Optional[NoveltyState]:
+        if v is None:
+            return None
+        if isinstance(v, str):
+            cleaned = v.strip().upper().replace(" ", "_")
+            try:
+                return NoveltyState(cleaned)
+            except ValueError:
+                return None
+        return v
+
+    @field_validator("provenance_level", mode="before")
+    @classmethod
+    def normalize_provenance_level(cls, v: Any) -> Optional[ProvenanceLevel]:
+        if v is None:
+            return None
+        if isinstance(v, str):
+            cleaned = v.strip().upper().replace(" ", "_")
+            try:
+                return ProvenanceLevel(cleaned)
+            except ValueError:
+                return None
+        return v
 
     @field_validator("sentiment", mode="before")
     @classmethod
