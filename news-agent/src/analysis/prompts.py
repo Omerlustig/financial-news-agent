@@ -11,12 +11,29 @@ EXCLUDED_NON_TICKER_TOKENS: Set[str] = {
     "FED", "SEC", "DOJ", "FTC", "EPA", "WHITEHOUSE", "CONGRESS", "WAR"
 }
 
+# Delisted or acquired equities mapped to their active public parent ticker, or None if private
+DELISTED_OR_ACQUIRED_TICKERS: dict[str, Optional[str]] = {
+    "CYBR": "$PANW",  # CyberArk acquired by Palo Alto Networks ($PANW) - CYBR delisted
+    "PFPT": None,     # Proofpoint acquired by Thoma Bravo - private/delisted
+    "SPLK": "$CSCO",  # Splunk acquired by Cisco ($CSCO) - SPLK delisted
+    "TWTR": None,     # Twitter acquired by X / Elon Musk - private/delisted
+    "ATVI": "$MSFT",  # Activision Blizzard acquired by Microsoft ($MSFT) - ATVI delisted
+    "VMW": "$AVGO",   # VMware acquired by Broadcom ($AVGO) - VMW delisted
+    "FEYE": None,     # FireEye acquired / delisted
+    "SAIL": None,     # SailPoint acquired by Thoma Bravo - private/delisted
+    "SUMO": None,     # Sumo Logic acquired by Francisco Partners - private/delisted
+}
+
 # Tradeable US equity/ETF ticker format: 1 to 5 alphabetic letters, optional dot suffix (e.g. $BRK.B)
 TICKER_REGEX = re.compile(r"^\$[A-Z]{1,5}(\.[A-Z]{1,2})?$")
 
 
 def filter_valid_tickers(tickers: List[str]) -> List[str]:
-    """Filters out invalid tickers, country names, and non-tradeable symbols."""
+    """Filters out invalid tickers, country names, and non-tradeable symbols.
+    
+    Automatically remaps acquired companies to their active parent company (e.g. CYBR -> PANW)
+    and drops private/delisted entities.
+    """
     valid_tickers = []
     seen = set()
     for t in tickers:
@@ -29,6 +46,15 @@ def filter_valid_tickers(tickers: List[str]) -> List[str]:
         symbol_without_prefix = cleaned[1:]
         if symbol_without_prefix in EXCLUDED_NON_TICKER_TOKENS:
             continue
+        
+        # Check if company was acquired or delisted
+        if symbol_without_prefix in DELISTED_OR_ACQUIRED_TICKERS:
+            parent_ticker = DELISTED_OR_ACQUIRED_TICKERS[symbol_without_prefix]
+            if not parent_ticker:
+                # Private entity with no public parent
+                continue
+            cleaned = parent_ticker
+
         if not TICKER_REGEX.match(cleaned):
             continue
         if cleaned not in seen:
@@ -114,7 +140,7 @@ Every catalyst analysis must evaluate opposing viewpoints, risks, and actionable
 
 MULTI-LANGUAGE & CROSS-MARKET COVERAGE (US + ISRAEL):
 - Ingest and process sources in both English and Hebrew seamlessly (e.g., Reuters, Bloomberg, CNBC, FT, SEC EDGAR, Globes, Calcalist, TheMarker, MAYA, TASE).
-- Accurately identify Israeli corporations, Dual-listed US/TASE equities, and domestic Israeli market leaders (e.g. $TEVA, $CHKP, $CYBR, $NICE, $WIX, $MNDY, $LUMI, $POLI, $ICL, $ESLT).
+- Accurately identify Israeli corporations, Dual-listed US/TASE equities, and domestic Israeli market leaders (e.g. $TEVA, $CHKP, $NICE, $WIX, $MNDY, $LUMI, $POLI, $ICL, $ESLT).
 - Normalize ALL JSON output fields to English financial terminology.
 
 DISTINGUISH 95% MARKET NOISE FROM 5% MARKET CATALYSTS:
@@ -122,14 +148,18 @@ DISTINGUISH 95% MARKET NOISE FROM 5% MARKET CATALYSTS:
 - CATALYSTS (FLAG AS MARKET MOVING): Landmark antitrust rulings or breakup suits, unexpected central bank rate moves, surprise multi-billion M&A transactions, major earnings surprises accompanied by guidance cuts/raises, critical export restrictions or trade embargoes, FDA approval/rejection decisions, emergency geopolitical shocks disrupting key trade arteries.
 
 TICKER VALIDATION & PUBLIC vs PRIVATE ENTITY RULES:
-- Output ONLY real, tradeable public equity or ETF ticker symbols prefixed with '$' (e.g., '$NVDA', '$AAPL', '$TSM', '$SMH', '$LUMI', '$CYBR', '$VRNS').
+- Output ONLY real, tradeable public equity or ETF ticker symbols prefixed with '$' (e.g., '$NVDA', '$AAPL', '$TSM', '$SMH', '$LUMI', '$CHKP', '$PANW').
+- DELISTED & ACQUIRED EQUITIES:
+  * CyberArk was acquired by Palo Alto Networks ($PANW) and $CYBR is DELISTED. Never recommend $CYBR — recommend parent $PANW, or public peers like $CHKP (Check Point), $CRWD (CrowdStrike), $FTNT (Fortinet), or sector ETF $CIBR.
+  * Splunk was acquired by Cisco ($CSCO) and $SPLK is DELISTED.
+  * Proofpoint was acquired by Thoma Bravo and is PRIVATE.
 - PRIVATE ENTITY GUARDRAIL: Many prominent companies in headlines (e.g. Proofpoint, OpenAI, Anthropic, SpaceX, Stripe, ByteDance, Databricks, Thoma Bravo, Citadel) are PRIVATE companies or private equity firms that CANNOT be bought or traded on public stock exchanges.
   * NEVER output tickers for private companies.
   * In 'catalyst_thesis' or 'recommendation', explicitly clarify when an entity is private (e.g., 'Acquirer Proofpoint is private/PE-owned and not publicly tradeable').
 - M&A (ACQUISITIONS & BUYOUTS) PLAYBOOK:
   * If the target company is public (e.g. Varonis $VRNS): Note that its shares jump towards the agreed buyout price (merger arbitrage) and will be delisted upon closing.
   * If the buyer is private (e.g. Proofpoint / Thoma Bravo): Direct public market investment to:
-    1) Direct public competitors/peers (e.g. $CYBR - CyberArk, $CRWD, $CHKP, $PANW) that benefit from sector valuation multiple re-rating and enterprise sales disruption during integration.
+    1) Direct public competitors/peers (e.g. $PANW - Palo Alto Networks, $CRWD - CrowdStrike, $CHKP - Check Point, $FTNT - Fortinet) that benefit from sector valuation multiple re-rating and enterprise sales disruption during integration.
     2) Sector-wide ETFs (e.g. $CIBR, $HACK for cybersecurity).
 - NEVER output country names, geopolitical territories, or government bodies as tickers (e.g., '$US', '$USA', '$CHINA', '$EU', '$UK', '$FED', '$SEC' are strictly forbidden).
 - If no specific tradeable entity or sector ETF has direct exposure, leave 'affected_tickers' empty: [].

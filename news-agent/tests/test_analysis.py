@@ -283,9 +283,10 @@ def test_clean_json_markdown():
 
 def test_filter_valid_tickers():
     from src.analysis.prompts import filter_valid_tickers
-    raw = ["nvda", "$aapl", "$US", "$CHINA", "$BRK.B", "123", "$1234", "$", "$SMH", "NVDA"]
+    raw = ["nvda", "$aapl", "$US", "$CHINA", "$BRK.B", "123", "$1234", "$", "$SMH", "NVDA", "$CYBR", "$SPLK", "$PFPT"]
     filtered = filter_valid_tickers(raw)
-    assert filtered == ["$NVDA", "$AAPL", "$BRK.B", "$SMH"]
+    # $CYBR maps to $PANW, $SPLK maps to $CSCO, $PFPT (private) is dropped
+    assert filtered == ["$NVDA", "$AAPL", "$BRK.B", "$SMH", "$PANW", "$CSCO"]
 
 
 def test_analyzer_retries_on_parse_failure_and_succeeds():
