@@ -3,7 +3,7 @@ import logging
 import os
 import re
 import time
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Set, Union
 
 import litellm
 litellm.suppress_debug_info = True
@@ -120,8 +120,7 @@ class MarketImpactAnalyzer:
         self.sentiment_engine = FinancialSentimentEngine()
         self.sentiment_4d_analyzer = FourDimensionalSentimentAnalyzer(sentiment_engine=self.sentiment_engine)
         self.challenger = AdversarialChallenger()
-        self.quota_exhausted = False
-
+        self.exhausted_models: Set[str] = set()
 
     def analyze(
         self,
@@ -138,14 +137,6 @@ class MarketImpactAnalyzer:
         if effective_wl_sectors is None and self.watchlist_settings and self.watchlist_settings.enabled:
             effective_wl_sectors = self.watchlist_settings.sectors
 
-        if self.quota_exhausted:
-            return self._build_fallback(
-                article,
-                "API request quota previously exhausted; evaluated with deterministic financial sentiment & regulatory engine.",
-                watchlist_tickers=effective_wl_tickers,
-                watchlist_sectors=effective_wl_sectors,
-            )
-
         system_prompt, user_prompt = build_analyst_prompt(
             article,
             watchlist_tickers=effective_wl_tickers,
@@ -161,17 +152,42 @@ class MarketImpactAnalyzer:
             models_to_check.extend(self.fallback_models)
         elif self.fallback_model:
             models_to_check.append(self.fallback_model)
+        else:
+            # Standard resilient fallback model candidates across versions and providers
+            standard_fallbacks = [
+                "gemini/gemini-3.7-flash",
+                "gemini/gemini-3.6-flash",
+                "gemini/gemini-2.5-flash",
+                "gemini/gemini-2.0-flash",
+                "gemini/gemini-1.5-flash",
+            ]
+            if os.environ.get("OPENAI_API_KEY"):
+                standard_fallbacks.append("gpt-4o-mini")
+            if os.environ.get("GROQ_API_KEY"):
+                standard_fallbacks.append("groq/llama-3.3-70b-versatile")
+            if os.environ.get("ANTHROPIC_API_KEY"):
+                standard_fallbacks.append("claude-3-5-haiku-20241022")
+
+            for m in standard_fallbacks:
+                if m not in models_to_check:
+                    models_to_check.append(m)
 
         candidate_models: List[str] = []
         for m in models_to_check:
             if m and m not in candidate_models:
                 candidate_models.append(m)
 
+        # Filter out models that already hit hard daily quota, but if all exhausted, reset to allow retry
+        active_models = [m for m in candidate_models if m not in self.exhausted_models]
+        if not active_models:
+            self.exhausted_models.clear()
+            active_models = list(candidate_models)
+
         last_error: Optional[Exception] = None
 
-        for model_idx, target_model in enumerate(candidate_models):
+        for model_idx, target_model in enumerate(active_models):
             is_fallback = model_idx > 0
-            has_fallback_remaining = model_idx < len(candidate_models) - 1
+            has_fallback_remaining = model_idx < len(active_models) - 1
             current_delay = self.retry_delay
 
             for attempt in range(1, self.max_retries + 1):
@@ -242,65 +258,48 @@ class MarketImpactAnalyzer:
 
                 except Exception as e:
                     last_error = e
+                    err_str = str(e).lower()
                     is_rate_limit = (
                         getattr(e, "status_code", None) == 429
-                        or "429" in str(e)
-                        or "rate_limit" in str(e).lower()
-                        or "ratelimit" in str(e).lower()
-                        or "quota" in str(e).lower()
-                        or "resource_exhausted" in str(e).lower()
+                        or (hasattr(e, "response") and getattr(e.response, "status_code", None) == 429)
+                        or "429" in err_str
+                        or "rate_limit" in err_str
+                        or "ratelimit" in err_str
+                        or "rate limit" in err_str
+                        or "too many requests" in err_str
+                        or "resource_exhausted" in err_str
+                        or "quota" in err_str
+                        or "tpm" in err_str
+                        or "rpm" in err_str
                     )
                     is_high_demand = (
-                        getattr(e, "status_code", None) == 503
-                        or "503" in str(e)
-                        or "high demand" in str(e).lower()
-                        or "temporarily unavailable" in str(e).lower()
-                        or "serviceunavailable" in str(e).lower()
+                        getattr(e, "status_code", None) in (503, 502, 504)
+                        or "503" in err_str
+                        or "high demand" in err_str
+                        or "temporarily unavailable" in err_str
+                        or "serviceunavailable" in err_str
                     )
 
                     is_auth_error = (
                         getattr(e, "status_code", None) in (401, 403)
-                        or "api key" in str(e).lower()
-                        or "credentials" in str(e).lower()
-                        or "authentication" in str(e).lower()
-                        or "unauthorized" in str(e).lower()
+                        or "api key" in err_str
+                        or "credentials" in err_str
+                        or "authentication" in err_str
+                        or "unauthorized" in err_str
                     )
 
-                    is_quota_error = (
-                        "quota" in str(e).lower()
-                        or "resource_exhausted" in str(e).lower()
-                        or "quota exceeded" in str(e).lower()
+                    is_quota_exhausted = (
+                        "daily quota" in err_str
+                        or "quota exceeded" in err_str
+                        or "billing" in err_str
+                        or "insufficient_quota" in err_str
                     )
-                    if is_quota_error and not has_fallback_remaining:
-                        self.quota_exhausted = True
-                        logger.info(
-                            "Daily API quota reached for model '%s'. Seamlessly using high-precision financial rules engine for catalyst scoring.",
-                            target_model,
-                        )
-                        return self._build_fallback(
-                            article,
-                            f"Daily quota reached for {target_model}",
-                            watchlist_tickers=effective_wl_tickers,
-                            watchlist_sectors=effective_wl_sectors,
-                        )
 
-                    # 1. Quota exhausted across all fallbacks
-                    if is_quota_error and not has_fallback_remaining and attempt >= self.max_retries:
-                        self.quota_exhausted = True
-                        logger.info(
-                            "Daily API quota reached across models. Seamlessly using high-precision financial rules engine for catalyst scoring.",
-                        )
-                        return self._build_fallback(
-                            article,
-                            f"Daily quota reached for {target_model}",
-                            watchlist_tickers=effective_wl_tickers,
-                            watchlist_sectors=effective_wl_sectors,
-                        )
-
-                    # 2. Auth error: retrying same credentials won't help, failover immediately if fallback available
+                    # 1. Auth error: retrying same credentials won't help, failover immediately if fallback available
                     if is_auth_error:
+                        self.exhausted_models.add(target_model)
                         if has_fallback_remaining:
-                            next_model = candidate_models[model_idx + 1]
+                            next_model = active_models[model_idx + 1]
                             logger.warning(
                                 "Model '%s' encountered auth/missing API key; failing over immediately to fallback model '%s'",
                                 target_model,
@@ -319,7 +318,19 @@ class MarketImpactAnalyzer:
                                 watchlist_sectors=effective_wl_sectors,
                             )
 
-                    # 3. Rate limit (429) or high demand (503): backoff and retry first!
+                    # 2. Hard daily quota exhausted: failover immediately to next model
+                    if is_quota_exhausted:
+                        self.exhausted_models.add(target_model)
+                        if has_fallback_remaining:
+                            next_model = active_models[model_idx + 1]
+                            logger.warning(
+                                "Model '%s' daily quota exhausted; failing over immediately to fallback model '%s'",
+                                target_model,
+                                next_model,
+                            )
+                            break
+
+                    # 3. Rate limit (429) or high demand (503): backoff and retry first, then fallback to other models!
                     if is_rate_limit or is_high_demand:
                         if attempt < self.max_retries:
                             sleep_time = max(current_delay, 2.0 * attempt)
@@ -341,9 +352,10 @@ class MarketImpactAnalyzer:
                             current_delay *= self.backoff_factor
                             continue
                         else:
-                            # Retries exhausted on this model
+                            # Retries exhausted on this model -> mark exhausted and failover to next model
+                            self.exhausted_models.add(target_model)
                             if has_fallback_remaining:
-                                next_model = candidate_models[model_idx + 1]
+                                next_model = active_models[model_idx + 1]
                                 logger.warning(
                                     "Model '%s' exhausted all %d attempts (%s); failing over to fallback model '%s'",
                                     target_model,
@@ -374,7 +386,7 @@ class MarketImpactAnalyzer:
                         current_delay *= self.backoff_factor
                         continue
                     elif has_fallback_remaining:
-                        next_model = candidate_models[model_idx + 1]
+                        next_model = active_models[model_idx + 1]
                         logger.warning(
                             "Model '%s' failed all %d attempts; failing over to fallback model '%s'",
                             target_model,

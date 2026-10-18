@@ -199,6 +199,14 @@ def test_load_actual_sources_yaml():
     assert any("federal reserve" in name for name in names)
     assert any("eia" in name for name in names)
 
+    # Added Bloomberg and Benzinga Sources
+    assert any("benzinga" in name for name in names)
+    assert any("bloomberg markets" in name for name in names)
+    assert any("bloomberg politics" in name for name in names)
+    assert any("bloomberg technology" in name for name in names)
+    assert any("bloomberg wealth" in name for name in names)
+    assert any("bloomberg europe" in name for name in names)
+
     # Israel Core
     assert any("globes" in name for name in names)
     assert any("calcalist" in name for name in names)
@@ -215,8 +223,9 @@ def test_load_actual_settings_yaml():
     assert isinstance(settings.filter.min_impact_grade, ImpactGrade)
     assert settings.filter.min_impact_grade == ImpactGrade.HIGH
     assert settings.llm.model == "gemini/gemini-3.8-flash"
-    assert settings.llm.fallback_model == "gemini/gemini-3.7-flash"
-    assert settings.llm.fallback_models == ["gemini/gemini-3.7-flash", "gemini/gemini-3.6-flash"]
+    assert "gemini/gemini-3.7-flash" in settings.llm.fallback_models
+    assert "gemini/gemini-3.6-flash" in settings.llm.fallback_models
+    assert "gpt-4o-mini" in settings.llm.fallback_models
     assert settings.llm.enable_cache is True
     assert settings.llm.monthly_budget_usd == 10.0
     # Unset telegram env vars should resolve to None rather than empty string

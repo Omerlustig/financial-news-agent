@@ -260,15 +260,6 @@ class Pipeline:
         - Non-qualifying events (WATCHLIST, INFORMATIONAL, UNVERIFIED, NO_ACTION,
           or failed hard gates) are suppressed, recorded with alerted=False, and audited.
         """
-        # 0. Unconditional force override (explicit --force CLI flag)
-        if self.force:
-            logger.info(
-                "Alert forced unconditionally via --force flag (status=%s, score=%d)",
-                analysis.status,
-                analysis.confidence_score,
-            )
-            return True
-
         # 1. Two-Layer Gate: Check gate_verdict if present
         if getattr(analysis, "two_layer_gate", None) is not None:
             if analysis.two_layer_gate.gate_verdict != "ALERT" and not self.alert_on_all:
@@ -452,7 +443,7 @@ class Pipeline:
 
             # If article was not analyzed by LLM (rate limit exhausted or credentials unavailable),
             # do not persist to DB/cache so it will be retried in the next polling cycle.
-            if not getattr(analysis, "is_llm_analyzed", True) and not (self.force or self.alert_on_all):
+            if not getattr(analysis, "is_llm_analyzed", True) and not self.alert_on_all:
                 logger.warning(
                     "Article '%s' (%s) was not analyzed by LLM (rate-limited / error); skipping storage persistence so it will be retried in the next cycle.",
                     canonical.title,

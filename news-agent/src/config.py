@@ -21,6 +21,7 @@ class SourceConfig(BaseModel):
     enabled: bool = Field(default=True, description="Whether this feed is actively polled.")
     max_items: Optional[int] = Field(default=None, description="Per-source maximum articles fetched per cycle (overrides global batch_size_per_source).")
     max_article_age_minutes: Optional[int] = Field(default=None, description="Per-source maximum article age in minutes (overrides global max_article_age_minutes).")
+    fallback_url: Optional[str] = Field(default=None, description="Fallback URL if primary feed fails, returns 0 entries, or is blocked.")
 
 
 class SourcesContainer(BaseModel):
@@ -74,7 +75,14 @@ class LLMSettings(BaseModel):
     model: str = Field(default="gemini/gemini-3.8-flash", description="LiteLLM model identifier.")
     fallback_model: Optional[str] = Field(default="gemini/gemini-3.7-flash", description="Primary fallback LiteLLM model identifier.")
     fallback_models: List[str] = Field(
-        default_factory=lambda: ["gemini/gemini-3.7-flash", "gemini/gemini-3.6-flash"],
+        default_factory=lambda: [
+            "gemini/gemini-3.7-flash",
+            "gemini/gemini-3.6-flash",
+            "gemini/gemini-2.5-flash",
+            "gemini/gemini-2.0-flash",
+            "gemini/gemini-1.5-flash",
+            "gpt-4o-mini",
+        ],
         description="Ordered list of fallback models on rate limit or failure."
     )
     enable_cache: bool = Field(default=True, description="Enable local response caching.")

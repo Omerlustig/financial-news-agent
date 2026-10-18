@@ -295,7 +295,7 @@ def run_once(
     config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to settings.yaml"),
     sources: Optional[str] = typer.Option(None, "--sources", "-s", help="Path to sources.yaml"),
     alert_on_all: bool = typer.Option(False, "--alert-on-all", help="Bypass impact and confidence thresholds for testing"),
-    force: bool = typer.Option(False, "--force", "-f", help="Force send alert to Telegram even if below threshold or already seen"),
+    force: bool = typer.Option(False, "--force", "-f", help="Force re-evaluation of articles in window including previously seen/alerted (strictly enforcing decision gates)"),
     limit_per_source: Optional[int] = typer.Option(None, "--limit-per-source", "--batch-size", "-b", help="Max articles to fetch per site (overrides settings.yaml)"),
     max_age_minutes: Optional[int] = typer.Option(None, "--max-age-minutes", "-m", help="Filter articles older than N minutes (overrides settings.yaml)"),
 ) -> None:
@@ -307,7 +307,7 @@ def run_once(
     pipeline = Pipeline(
         settings=settings,
         sources=sources_list,
-        alert_on_all=alert_on_all or force or settings.filter.alert_on_all,
+        alert_on_all=alert_on_all or settings.filter.alert_on_all,
         force=force,
         batch_size_per_source=limit_per_source,
         max_article_age_minutes=max_age_minutes,
@@ -354,7 +354,7 @@ def scan(
     config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to settings.yaml"),
     sources: Optional[str] = typer.Option(None, "--sources", "-s", help="Path to sources.yaml"),
     alert_on_all: bool = typer.Option(False, "--alert-on-all", help="Bypass impact and confidence thresholds for testing"),
-    force: bool = typer.Option(False, "--force", "-f", help="Force send alert to Telegram even if below threshold or already seen"),
+    force: bool = typer.Option(False, "--force", "-f", help="Force re-evaluation of articles in window including previously seen/alerted (strictly enforcing decision gates)"),
     limit_per_source: Optional[int] = typer.Option(None, "--limit-per-source", "--batch-size", "-b", help="Max articles to fetch per site (overrides settings.yaml)"),
     max_age_minutes: Optional[int] = typer.Option(None, "--max-age-minutes", "-m", help="Filter articles older than N minutes (overrides settings.yaml)"),
 ) -> None:

@@ -620,6 +620,90 @@ def test_fetch_all_sources_includes_html_sources():
         assert results[1].title == "HTML Title"
 
 
+def test_rss_fetcher_fallback_url_when_primary_empty():
+    src = SourceConfig(
+        name="Fallback Feed",
+        type="rss",
+        url="https://example.com/primary_empty.rss",
+        fallback_url="https://example.com/fallback.rss",
+        enabled=True,
+    )
+    mock_entry = {
+        "title": "Fallback News Article",
+        "link": "https://example.com/fallback-1",
+        "published": "Sun, 18 Oct 2026 12:00:00 GMT",
+    }
+
+    def mock_fetch_parsed(fetch_url):
+        if fetch_url == "https://example.com/primary_empty.rss":
+            return {"entries": []}, False, b"<rss></rss>"
+        elif fetch_url == "https://example.com/fallback.rss":
+            return {"entries": [mock_entry]}, False, b"<rss><item></item></rss>"
+        return None, False, None
+
+    fetcher = RSSFetcher(src)
+    with patch.object(fetcher, "_fetch_parsed", side_effect=mock_fetch_parsed):
+        articles = fetcher.fetch()
+        assert len(articles) == 1
+        assert articles[0].title == "Fallback News Article"
+        assert articles[0].url == "https://example.com/fallback-1"
+
+
+def test_rss_fetcher_fallback_url_when_primary_http_fails():
+    src = SourceConfig(
+        name="Fallback Error Feed",
+        type="rss",
+        url="https://example.com/primary_forbidden.rss",
+        fallback_url="https://example.com/fallback_valid.rss",
+        enabled=True,
+    )
+    mock_entry = {
+        "title": "Recovered Headline",
+        "link": "https://example.com/rec-1",
+        "published": "Sun, 18 Oct 2026 12:00:00 GMT",
+    }
+
+    def mock_fetch_parsed(fetch_url):
+        if fetch_url == "https://example.com/primary_forbidden.rss":
+            return None, False, None  # HTTP 403 or failure
+        elif fetch_url == "https://example.com/fallback_valid.rss":
+            return {"entries": [mock_entry]}, False, b"<rss><item></item></rss>"
+        return None, False, None
+
+    fetcher = RSSFetcher(src)
+    with patch.object(fetcher, "_fetch_parsed", side_effect=mock_fetch_parsed):
+        articles = fetcher.fetch()
+        assert len(articles) == 1
+        assert articles[0].title == "Recovered Headline"
+
+
+def test_rss_fetcher_automatic_domain_fallback_for_benzinga():
+    src = SourceConfig(
+        name="Benzinga Auto",
+        type="rss",
+        url="https://www.benzinga.com/latest?page=1&feed=rss",
+        enabled=True,
+    )
+    mock_entry = {
+        "title": "Benzinga Auto Headline",
+        "link": "https://www.benzinga.com/money/1",
+        "published": "Sun, 18 Oct 2026 12:00:00 GMT",
+    }
+
+    def mock_fetch_parsed(fetch_url):
+        if "latest" in fetch_url:
+            return {"entries": []}, False, b"<html>cloudflared</html>"
+        elif "benzinga.com/feed" in fetch_url:
+            return {"entries": [mock_entry]}, False, b"<rss></rss>"
+        return None, False, None
+
+    fetcher = RSSFetcher(src)
+    with patch.object(fetcher, "_fetch_parsed", side_effect=mock_fetch_parsed):
+        articles = fetcher.fetch()
+        assert len(articles) == 1
+        assert articles[0].title == "Benzinga Auto Headline"
+
+
 
 
 

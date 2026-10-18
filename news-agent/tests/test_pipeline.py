@@ -1,7 +1,16 @@
 from unittest.mock import MagicMock, patch
 import pytest
 
-from src.models import RawArticle, MarketImpactAnalysis, ImpactGrade, EventStatus, HardGates
+from src.models import (
+    RawArticle,
+    MarketImpactAnalysis,
+    ImpactGrade,
+    EventStatus,
+    HardGates,
+    DirectionalStance,
+    FourDimensionalSentiment,
+    AdversarialReview,
+)
 from src.pipeline import Pipeline, CycleSummary
 from src.analysis.analyzer import AnalysisError
 from src.config import Settings, FilterSettings, WatchlistSettings
@@ -1525,6 +1534,93 @@ def test_pipeline_high_event_quality_low_opportunity_held_in_watchlist(tmp_path)
     assert rec.event_quality_score >= 8.0  # FT confirmed
     assert rec.opportunity_score < 6.0     # Low actionable edge
     assert rec.status == "WATCHLIST"
+
+
+def test_pipeline_force_mode_strictly_enforces_gates_and_suppresses_non_qualifying(tmp_path):
+    """Verify that --force re-evaluates all articles in window but only alerts those passing gates."""
+    db_file = str(tmp_path / "test_force_gates.db")
+    storage = SQLiteStorage(db_path=db_file)
+    mock_analyzer = MagicMock()
+    mock_notifier = MagicMock()
+    mock_notifier.send_alert.return_value = True
+
+    art_qualifying = RawArticle(
+        title="Nvidia Blackwell Ultra Datacenter Order Surge",
+        url="https://example.com/nvda-surge",
+        source_name="Financial Times",
+    )
+    art_non_qualifying = RawArticle(
+        title="Speculative Blog Post About Tech Stocks",
+        url="https://example.com/tech-blog",
+        source_name="Random Blog",
+    )
+
+    analysis_qualifying = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=9,
+        impact_grade=ImpactGrade.CRITICAL,
+        affected_tickers=["$NVDA"],
+        status=EventStatus.OPPORTUNITY_CANDIDATE,
+        directional_stance=DirectionalStance.BULLISH,
+        hard_gates=HardGates(
+            is_novel=True,
+            is_verified=True,
+            has_direct_exposure=True,
+            passes_all_gates=True,
+        ),
+        four_d_sentiment=FourDimensionalSentiment(
+            linguistic_sentiment=0.9,
+            fundamental_impact=1.0,
+            expectation_surprise=1.0,
+            price_implication=0.95,
+            surprise_verdict="BEAT",
+        ),
+        adversarial_review=AdversarialReview(
+            bearish_counter_thesis="Supply constraints could defer revenue recognition.",
+            priced_in_risk="High valuation.",
+            macro_confounding_risk="Tech sector correlation.",
+            falsification_threshold="Order cancellation > 10%.",
+            is_thesis_robust=True,
+        ),
+        summary="Nvidia Blackwell Ultra hyperscaler orders surged.",
+        catalyst_thesis="Immediate datacenter revenue expansion.",
+    )
+
+    analysis_non_qualifying = MarketImpactAnalysis(
+        is_market_moving=False,
+        confidence_score=3,
+        impact_grade=ImpactGrade.LOW,
+        affected_tickers=[],
+        status=EventStatus.WATCHLIST,
+        directional_stance=DirectionalStance.NEUTRAL,
+        hard_gates=HardGates(
+            is_novel=False,
+            is_verified=False,
+            has_direct_exposure=False,
+            passes_all_gates=False,
+        ),
+        summary="Speculative rumor.",
+        catalyst_thesis="Unverified claim.",
+    )
+
+    mock_analyzer.analyze.side_effect = [analysis_qualifying, analysis_non_qualifying]
+
+    pipeline = Pipeline(
+        storage=storage,
+        analyzer=mock_analyzer,
+        notifier=mock_notifier,
+        force=True,  # Force mode active!
+        min_score=8,
+    )
+
+    summary = pipeline.process_articles([art_qualifying, art_non_qualifying])
+
+    # Both articles were evaluated (force mode bypassed deduplication)
+    assert summary.analyzed == 2
+    # But ONLY the qualifying article passed gates and triggered Telegram alert!
+    assert summary.alerted == 1
+    assert mock_notifier.send_alert.call_count == 1
+    assert mock_notifier.send_alert.call_args[0][0].title == art_qualifying.title
 
 
 

@@ -51,7 +51,32 @@ sources:
 
   - name: "Bloomberg Markets"
     type: "rss"
-    url: "https://feeds.bloomberg.com/markets/news.rss"
+    url: "https://www.bloomberg.com/feeds/markets/news.rss"
+    fallback_url: "https://feeds.bloomberg.com/markets/news.rss"
+    enabled: true
+
+  - name: "Bloomberg Politics"
+    type: "rss"
+    url: "https://www.bloomberg.com/feeds/politics/news.rss"
+    fallback_url: "https://feeds.bloomberg.com/politics/news.rss"
+    enabled: true
+
+  - name: "Bloomberg Technology"
+    type: "rss"
+    url: "https://www.bloomberg.com/feeds/technology/news.rss"
+    fallback_url: "https://feeds.bloomberg.com/technology/news.rss"
+    enabled: true
+
+  - name: "Bloomberg Wealth"
+    type: "rss"
+    url: "https://www.bloomberg.com/feeds/wealth/news.rss"
+    fallback_url: "https://news.google.com/rss/search?q=site:bloomberg.com+wealth+when:7d&hl=en-US&gl=US&ceid=US:en"
+    enabled: true
+
+  - name: "Bloomberg Europe"
+    type: "rss"
+    url: "https://www.bloomberg.com/europe"
+    fallback_url: "https://news.google.com/rss/search?q=site:bloomberg.com/europe+OR+site:bloomberg.com/news+when:2d&hl=en-US&gl=US&ceid=US:en"
     enabled: true
 
   - name: "MarketWatch Top Stories"
@@ -180,28 +205,8 @@ sources:
     type: "rss"
     url: "https://news.google.com/rss/search?q=site:mako.co.il/news-money+when:7d&hl=he&gl=IL&ceid=IL:he"
     enabled: true
-
-  - name: "Globes Finance Node 2"
+  - name: "Benzinga Latest"
     type: "rss"
-    url: "https://www.globes.co.il/webservice/rss/rssfeeder.asmx/FeederNode?iID=2"
-    enabled: true
-
-  - name: "Fox Business Latest"
-    type: "rss"
-    url: "https://feeds.foxbusiness.com/foxbusiness/latest"
-    enabled: true
-
-  - name: "Fox Business Markets"
-    type: "rss"
-    url: "https://feeds.foxbusiness.com/foxbusiness/markets"
-    enabled: true
-
-  - name: "TechCrunch Startups & Tech"
-    type: "rss"
-    url: "https://techcrunch.com/feed/"
-    enabled: true
-
-  - name: "AllSides News"
-    type: "rss"
-    url: "https://www.allsides.com/rss/news"
+    url: "https://www.benzinga.com/latest?page=1&feed=rss"
+    fallback_url: "https://www.benzinga.com/feed"
     enabled: true
