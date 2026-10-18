@@ -471,10 +471,14 @@ def test_telegram_message_formatting_institutional_causal_chain():
 
     # 7. Beneficiaries vs Negatively Exposed
     assert "🟢 <b>Beneficiaries:</b> $NVDA, $AVGO" in msg
-    assert "🔴 <b>Negatively Exposed:</b> $INTC" in msg
+    # Simple Explanation block
+    assert "📖 <b>SIMPLE EXPLANATION:</b>" in msg
+    assert "• <b>Event:</b>" in msg
+    assert "• <b>Direction:</b>" in msg
+    assert "• <b>Actionable Positioning:</b>" in msg
+    assert "→ Because" in msg
 
     # Recommendation & Final Conclusion Brief
-    assert "🏁 <b>OVERALL BOTTOM LINE:</b>" in msg
     assert "💡 <b>Recommendation:</b>" in msg
     assert "🎯 <b>FINAL CONCLUSION & BOTTOM LINE:</b>" in msg
     assert "Actionable Positioning:" in msg
@@ -486,7 +490,13 @@ def test_telegram_message_formatting_institutional_causal_chain():
     # 9. Direct URL Link
     assert '<a href="https://reuters.com/business/semiconductors-allied-exemption">https://reuters.com/business/semiconductors-allied-exemption</a>' in msg
 
-    # 10. Mandatory Disclaimer at footer
+    # 10. OVERALL BOTTOM LINE at very end (after link and before disclaimer)
+    assert "🏁 <b>OVERALL BOTTOM LINE:</b>" in msg
+    url_idx = msg.find('<a href="https://reuters.com/business/semiconductors-allied-exemption">')
+    bottom_line_idx = msg.find("🏁 <b>OVERALL BOTTOM LINE:</b>")
+    assert bottom_line_idx > url_idx, "Overall bottom line must be positioned at the end of the message!"
+
+    # 11. Mandatory Disclaimer at footer
     assert "<i>⚠️ News-derived hypothesis. Market pricing, valuation, and entry points were not checked.</i>" in msg
 
 

@@ -128,6 +128,114 @@ def format_sentiment_gauge(score: float, width: int = 10) -> str:
         return f"[{'🟥' * filled}{'⬜' * empty}] ({clamped:.2f})"
 
 
+TICKER_COMPANY_MAP: Dict[str, str] = {
+    "$FSLR": "First Solar",
+    "$RUN": "Sunrun",
+    "$ENPH": "Enphase Energy",
+    "$SEDG": "SolarEdge",
+    "$VRNS": "Varonis Systems",
+    "$PANW": "Palo Alto Networks",
+    "$CRWD": "CrowdStrike",
+    "$CHKP": "Check Point",
+    "$FTNT": "Fortinet",
+    "$CIBR": "Cybersecurity ETF",
+    "$NVDA": "Nvidia",
+    "$MSFT": "Microsoft",
+    "$ADBE": "Adobe",
+    "$AAPL": "Apple",
+    "$GOOGL": "Alphabet",
+    "$AMZN": "Amazon",
+    "$TSLA": "Tesla",
+    "$INTC": "Intel",
+    "$AMD": "AMD",
+    "$TSM": "TSMC",
+    "$AVGO": "Broadcom",
+    "$QCOM": "Qualcomm",
+    "$DAL": "Delta Air Lines",
+    "$UAL": "United Airlines",
+    "$AAL": "American Airlines",
+    "$LUV": "Southwest Airlines",
+    "$JETS": "Airline ETF",
+    "$BA": "Boeing",
+    "$LMT": "Lockheed Martin",
+    "$RTX": "RTX Corp",
+    "$ESLT": "Elbit Systems",
+    "$TEVA": "Teva Pharmaceutical",
+    "$NICE": "NICE Systems",
+    "$WIX": "Wix.com",
+    "$MNDY": "Monday.com",
+    "$ACN": "Accenture",
+    "$INFY": "Infosys",
+    "$XLK": "Tech ETF",
+    "$SMH": "Semiconductor ETF",
+    "$XLE": "Energy ETF",
+    "$SPY": "S&P 500 ETF",
+    "$QQQ": "Nasdaq 100 ETF",
+}
+
+
+def format_ticker_with_company(ticker: str) -> str:
+    """Format ticker symbol with full company name if available (e.g. $FSLR (First Solar))."""
+    cleaned = ticker.strip().upper()
+    company = TICKER_COMPANY_MAP.get(cleaned)
+    if company:
+        return f"{cleaned} ({company})"
+    return cleaned
+
+
+def get_directional_simple_explanation(stance_val: Optional[str], sectors: List[str]) -> str:
+    """Generate a plain-English directional impact summary."""
+    s = (stance_val or "").upper()
+    sec_name = sectors[0] if sectors and sectors != ["None"] else "the sector"
+    if "BULL" in s:
+        return f"Positive for {sec_name} and domestic leaders"
+    elif "BEAR" in s:
+        return f"Headwinds and margin pressure for {sec_name}"
+    elif "VOL" in s:
+        return f"Positive for domestic producers, negative for import-dependent users"
+    return "Neutral / selective positioning"
+
+
+def get_simple_reason_for_beneficiary(ticker: str, analysis: MarketImpactAnalysis) -> str:
+    """Generate a clear 'Because' explanation for why a stock/sector is favored."""
+    cleaned = ticker.strip().upper()
+    if cleaned == "$FSLR":
+        return "Because it already manufactures domestically in the US and gains competitive advantage from trade restrictions."
+    if cleaned in ("$VRNS",):
+        return "Because the buyout offer provides immediate equity re-rating toward the acquisition price."
+    if cleaned in ("$PANW", "$CRWD", "$CHKP", "$FTNT", "$CIBR"):
+        return "Because expanding sector M&A valuation multiples lift competitor valuations across cybersecurity peers."
+    if cleaned in ("$NVDA", "$TSM", "$AVGO"):
+        return "Because strong enterprise AI demand and backlog acceleration directly expand operating margins."
+    if cleaned in ("$ACN", "$INFY"):
+        return "Because US visa restrictions accelerate enterprise offshoring and IT consultancy contract awards."
+    if cleaned in ("$DAL", "$UAL", "$AAL"):
+        return "Because capacity discipline and premium route demand support higher passenger yields."
+    if analysis.causal_chain and analysis.causal_chain.economic_mechanism:
+        mech = analysis.causal_chain.economic_mechanism.strip()
+        if len(mech) > 130:
+            mech = mech[:127] + "..."
+        return f"Because {mech[0].lower() + mech[1:]}"
+    return "Because it stands to capture market share and benefit from the positive catalyst."
+
+
+def get_simple_reason_for_exposed(ticker: str, analysis: MarketImpactAnalysis) -> str:
+    """Generate a clear 'Because' explanation for why a stock/sector should be avoided or hedged."""
+    cleaned = ticker.strip().upper()
+    if cleaned in ("$RUN", "$ENPH", "$SEDG"):
+        return "Because they install residential panels and may face higher equipment costs and supply shortages."
+    if cleaned in ("$INTC",):
+        return "Because of foundry packaging bottlenecks, delayed roadmap execution, and margin pressure."
+    if cleaned in ("$MSFT", "$ADBE"):
+        return "Because tightening immigration/visa programs elevates engineering wage inflation and project overhead."
+    if analysis.causal_chain and analysis.causal_chain.counterarguments:
+        counter = analysis.causal_chain.counterarguments.strip()
+        if len(counter) > 130:
+            counter = counter[:127] + "..."
+        return f"Because of {counter[0].lower() + counter[1:]}"
+    return "Because it faces margin pressure, rising supply costs, or regulatory headwinds."
+
+
 def format_telegram_message(
     article: RawArticle,
     analysis: MarketImpactAnalysis,
@@ -320,24 +428,30 @@ def format_telegram_message(
         else:
             rec = "Track subsequent corporate disclosures and primary filings for tradeable volume confirmation."
 
-    # OVERALL BOTTOM LINE (Full Message Summarization at a glance)
+    # 1. 📖 SIMPLE EXPLANATION (Plain English with 'Because' reasoning)
+    direction_desc = get_directional_simple_explanation(stance_val, sectors)
+    simple_event = article.title
     lines.append("")
-    lines.append("🏁 <b>OVERALL BOTTOM LINE:</b>")
-    lines.append(f"• <b>Event:</b> {escape_html(summary_text)}")
-    if mechanism and mechanism != "None" and mechanism != summary_text:
-        lines.append(f"• <b>Mechanism:</b> {escape_html(mechanism)}")
+    lines.append("📖 <b>SIMPLE EXPLANATION:</b>")
+    lines.append(f"• <b>Event:</b> {escape_html(simple_event)}")
+    lines.append(f"• <b>Direction:</b> <b>{escape_html(stance_val or 'NEUTRAL')}</b> ({escape_html(direction_desc)})")
+    lines.append("• <b>Actionable Positioning:</b>")
 
-    action_summary_items = []
     if beneficiaries and beneficiaries != ["None"]:
-        action_summary_items.append(f"🟢 Favor: {', '.join(beneficiaries)}")
-    if negatively_exposed and negatively_exposed != ["None"]:
-        action_summary_items.append(f"🔴 Avoid: {', '.join(negatively_exposed)}")
-    if not action_summary_items and sectors and sectors != ["None"]:
-        action_summary_items.append(f"🏭 In Play: {sectors_str}")
-    if action_summary_items:
-        lines.append(f"• <b>Action:</b> {escape_html(' | '.join(action_summary_items))}")
+        for b in beneficiaries[:3]:
+            b_with_co = format_ticker_with_company(b)
+            b_reason = get_simple_reason_for_beneficiary(b, analysis)
+            lines.append(f"    • 🟢 <b>Favor {escape_html(b_with_co)}</b> → {escape_html(b_reason)}")
+    elif sectors and sectors != ["None"]:
+        lines.append(f"    • 🟢 <b>Favor {escape_html(sectors_str)}</b> → Because sector-wide tailwinds expand operating margins.")
 
-    lines.append(f"• <b>Takeaway:</b> {escape_html(rec)}")
+    if negatively_exposed and negatively_exposed != ["None"]:
+        for e in negatively_exposed[:3]:
+            e_with_co = format_ticker_with_company(e)
+            e_reason = get_simple_reason_for_exposed(e, analysis)
+            lines.append(f"    • 🔴 <b>Avoid {escape_html(e_with_co)}</b> → {escape_html(e_reason)}")
+    elif sectors and sectors != ["None"] and "BEAR" in str(stance_val):
+        lines.append(f"    • 🔴 <b>Avoid {escape_html(sectors_str)}</b> → Because sector-wide headwinds compress valuation multiples.")
 
     # Executive Summary (Detailed Facts)
     lines.append("")
@@ -401,6 +515,25 @@ def format_telegram_message(
     escaped_url_text = escape_html(article.url)
     lines.append("")
     lines.append(f'🔗 <a href="{escaped_url_attr}">{escaped_url_text}</a>')
+
+    # 2. 🏁 OVERALL BOTTOM LINE (The last thing in the message, right before disclaimer)
+    lines.append("")
+    lines.append("🏁 <b>OVERALL BOTTOM LINE:</b>")
+    lines.append(f"• <b>Event:</b> {escape_html(summary_text)}")
+    if mechanism and mechanism != "None" and mechanism != summary_text:
+        lines.append(f"• <b>Mechanism:</b> {escape_html(mechanism)}")
+
+    action_summary_items = []
+    if beneficiaries and beneficiaries != ["None"]:
+        action_summary_items.append(f"🟢 Favor: {', '.join(beneficiaries)}")
+    if negatively_exposed and negatively_exposed != ["None"]:
+        action_summary_items.append(f"🔴 Avoid: {', '.join(negatively_exposed)}")
+    if not action_summary_items and sectors and sectors != ["None"]:
+        action_summary_items.append(f"🏭 In Play: {sectors_str}")
+    if action_summary_items:
+        lines.append(f"• <b>Action:</b> {escape_html(' | '.join(action_summary_items))}")
+
+    lines.append(f"• <b>Takeaway:</b> {escape_html(rec)}")
 
     # Mandatory Disclaimer at footer
     disclaimer_text = (
