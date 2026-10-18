@@ -43,13 +43,42 @@ BotFather is Telegram's official bot for creating and managing bots.
 
 ---
 
-## 🔑 Step 2: Start Your Bot (**Crucial Step!**)
+### Step 1.1: Verify Your Bot Token via `getMe`
+
+Right after getting your token, open your web browser and navigate to:
+```text
+https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getMe
+```
+*(Replace `<YOUR_BOT_TOKEN>` with the token you just received).*
+
+You will see a JSON response confirming your bot is active:
+```json
+{
+  "ok": true,
+  "result": {
+    "id": 8801638490,
+    "is_bot": true,
+    "first_name": "stock-hints",
+    "username": "stocks_hints_bot",
+    "can_join_groups": true
+  }
+}
+```
+
+> [!NOTE]
+> - **What `getMe` tells you**: It confirms your API token is 100% valid and gives you your bot's exact username (e.g. `@stocks_hints_bot`).
+> - ⚠️ **Important distinction**: Notice `result.id` (`8801638490`). That is the **Bot's own ID**. Do **NOT** set `TELEGRAM_CHAT_ID` to this ID! A bot cannot send messages to itself (`Forbidden: the bot can't send messages to the bot`).
+> - To get your **Channel ID** or **Personal Chat ID**, proceed to Step 2 and Step 3 below using `getUpdates` or `@userinfobot`.
+
+---
+
+## 🔑 Step 2: Start Your Bot (or Add to Channel) (**Crucial Step!**)
 
 > [!IMPORTANT]
-> **Telegram bots cannot message a user first.** You must initiate the conversation so Telegram grants the bot permission to deliver alerts to you.
+> **Telegram bots cannot message a user or channel first.** You must either start a chat or add the bot as an administrator.
 
-1. In Telegram, search for your bot's **username** (the one you created in Step 1.6, e.g. `@omer_market_news_bot`).
-2. Open the chat and click **Start** (or send `/start` or `hello`).
+1. **For Personal Alerts**: In Telegram, search for your bot's username (from `getMe`, e.g. `@stocks_hints_bot`) and click **Start** (or send `/start` or `hello`).
+2. **For Channel Alerts**: Create a Telegram Channel, go to **Channel Settings** $\rightarrow$ **Administrators** $\rightarrow$ **Add Administrator**, search for your bot's username, and add it with permission to **Post Messages**. Send any message (e.g. `test`) to the channel.
 
 ---
 
