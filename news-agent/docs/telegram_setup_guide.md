@@ -2,6 +2,15 @@
 
 This guide walks you through generating your **`TELEGRAM_BOT_TOKEN`** and **`TELEGRAM_CHAT_ID`** in under 2 minutes, configuring them in your environment, and testing live market alerts.
 
+## ⚡ Quick Reference
+
+| Credential | What it is | How to get it |
+| :--- | :--- | :--- |
+| **`TELEGRAM_BOT_TOKEN`** | The API key for your bot | Chat with **`@BotFather`** on Telegram $\rightarrow$ send `/newbot` |
+| **Bot Verification** | Confirms token is active & gives bot username | Open in browser: `https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getMe` |
+| **`TELEGRAM_CHAT_ID` (Personal)** | **Your personal account ID** | Chat with **`@userinfobot`** on Telegram $\rightarrow$ click **Start** |
+| **`TELEGRAM_CHAT_ID` (Channel)** | Broadcast channel ID (`-100...`) | Add bot as Admin, post message, check `https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates` |
+
 ---
 
 ## 📋 Overview
@@ -68,7 +77,8 @@ You will see a JSON response confirming your bot is active:
 > [!NOTE]
 > - **What `getMe` tells you**: It confirms your API token is 100% valid and gives you your bot's exact username (e.g. `@stocks_hints_bot`).
 > - ⚠️ **Important distinction**: Notice `result.id` (`8801638490`). That is the **Bot's own ID**. Do **NOT** set `TELEGRAM_CHAT_ID` to this ID! A bot cannot send messages to itself (`Forbidden: the bot can't send messages to the bot`).
-> - To get your **Channel ID** or **Personal Chat ID**, proceed to Step 2 and Step 3 below using `getUpdates` or `@userinfobot`.
+> - 👤 **To get YOUR Personal Chat ID**: Search for **`@userinfobot`** in Telegram and click **Start** — it immediately replies with your numeric personal ID!
+> - 📢 **To get a Channel ID**: Add your bot as an admin to your channel, post a message, and check `getUpdates` (explained in Step 3 Method C below).
 
 ---
 
