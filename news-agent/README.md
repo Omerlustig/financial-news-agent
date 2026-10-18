@@ -559,3 +559,4 @@ pytest news-agent/tests/ --cov=src --cov-report=term-missing
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
 Sun Oct 18 13:59:47 IDT 2026
+
