@@ -6,6 +6,7 @@ from src.pipeline import Pipeline, CycleSummary
 from src.analysis.analyzer import AnalysisError
 from src.config import Settings, FilterSettings, WatchlistSettings
 from src.notification.console import ConsoleNotifier
+from src.storage.sqlite import SQLiteStorage
 
 
 
@@ -1313,6 +1314,53 @@ def test_pipeline_skips_storage_and_cache_for_unanalyzed_articles(tmp_path):
 
     # Now it is properly persisted in SQLite and filtered out in subsequent cycles
     assert len(real_storage.filter_unseen([art])) == 0
+
+
+def test_pipeline_force_mode_bypasses_deduplication(tmp_path):
+    """Verify that force mode re-evaluates and alerts on all articles in the window, even if already marked seen."""
+    db_file = str(tmp_path / "test_force.db")
+    storage = SQLiteStorage(db_path=db_file)
+    mock_analyzer = MagicMock()
+    mock_notifier = MagicMock()
+    mock_notifier.send_alert.return_value = True
+
+    art1 = RawArticle(title="Apple unveils breakthrough quantum chip", url="https://example.com/1", source_name="Reuters")
+    art2 = RawArticle(title="Boeing secures massive commercial airline contract", url="https://example.com/2", source_name="Bloomberg")
+
+    analysis1 = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=8,
+        impact_grade=ImpactGrade.HIGH,
+        affected_tickers=["$AAPL"],
+        summary="Apple beats.",
+        catalyst_thesis="Strong iPhone sales.",
+    )
+    analysis2 = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=9,
+        impact_grade=ImpactGrade.CRITICAL,
+        affected_tickers=["$MSFT"],
+        summary="Microsoft cloud acceleration.",
+        catalyst_thesis="Azure growth.",
+    )
+    mock_analyzer.analyze.side_effect = [analysis1, analysis2, analysis1, analysis2]
+
+    # First cycle: normal mode
+    p1 = Pipeline(storage=storage, analyzer=mock_analyzer, notifier=mock_notifier, force=False)
+    s1 = p1.process_articles([art1, art2])
+    assert s1.analyzed == 2
+    assert s1.alerted == 2
+
+    # Both are now seen in storage
+    assert len(storage.filter_unseen([art1, art2])) == 0
+
+    # Second cycle with force=True: should process BOTH articles despite being already seen
+    p2 = Pipeline(storage=storage, analyzer=mock_analyzer, notifier=mock_notifier, force=True)
+    s2 = p2.process_articles([art1, art2])
+    assert s2.analyzed == 2
+    assert s2.alerted == 2
+    assert mock_notifier.send_alert.call_count == 4
+
 
 
 

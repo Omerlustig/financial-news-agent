@@ -186,14 +186,22 @@ sources:
     url: "https://www.globes.co.il/webservice/rss/rssfeeder.asmx/FeederNode?iID=2"
     enabled: true
 
-  # Google Alerts (Custom Real-Time Keyword Alerts)
-  # How to use:
-  # 1. Go to https://www.google.com/alerts
-  # 2. Enter any search query (e.g. "merger OR acquisition OR earnings OR delisted")
-  # 3. Under Options, set "Deliver to: RSS feed"
-  # 4. Copy the generated feed URL and paste below:
-  # - name: "Google Alert - M&A & Earnings"
-  #   type: "rss"
-  #   url: "https://www.google.com/alerts/feeds/YOUR_USER_ID/YOUR_ALERT_ID"
-  #   enabled: true
+  - name: "Fox Business Latest"
+    type: "rss"
+    url: "https://feeds.foxbusiness.com/foxbusiness/latest"
+    enabled: true
 
+  - name: "Fox Business Markets"
+    type: "rss"
+    url: "https://feeds.foxbusiness.com/foxbusiness/markets"
+    enabled: true
+
+  - name: "TechCrunch Startups & Tech"
+    type: "rss"
+    url: "https://techcrunch.com/feed/"
+    enabled: true
+
+  - name: "AllSides News"
+    type: "rss"
+    url: "https://www.allsides.com/rss/news"
+    enabled: true

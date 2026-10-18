@@ -436,6 +436,32 @@ def format_telegram_message(
         e_reason = get_simple_reason_for_exposed(top_e, analysis)
         lines.append(f"   • 🔴 <b>{escape_html(e_with_co)}:</b> {escape_html(e_reason)}")
 
+    # TradingView Technical Confluence Check
+    if getattr(analysis, "technicals", None):
+        lines.append("")
+        lines.append("📈 <b>TRADINGVIEW TECHNICAL CONFLUENCE:</b>")
+        for tech in analysis.technicals[:3]:
+            t_rec = tech.recommendation
+            if "BUY" in t_rec:
+                t_badge = f"🟢 {t_rec}"
+            elif "SELL" in t_rec:
+                t_badge = f"🔴 {t_rec}"
+            else:
+                t_badge = f"⚪ {t_rec}"
+
+            details = []
+            if tech.rsi is not None:
+                details.append(f"RSI: {tech.rsi:.1f}")
+            if tech.close_price is not None:
+                details.append(f"${tech.close_price:.2f}")
+            if tech.sma50 is not None:
+                sma_pos = "Above" if (tech.close_price or 0) >= tech.sma50 else "Below"
+                details.append(f"{sma_pos} 50-SMA ${tech.sma50:.2f}")
+
+            detail_str = f" ({' | '.join(details)})" if details else ""
+            confluence_str = f" → <i>{escape_html(tech.confluence_note)}</i>" if tech.confluence_note else ""
+            lines.append(f"• <b>{escape_html(tech.symbol)}:</b> {t_badge}{detail_str}{confluence_str}")
+
     # ==============================================================
     # 📖 2. THE CATALYST (Short, focused explanation of what happened & why)
     # ==============================================================

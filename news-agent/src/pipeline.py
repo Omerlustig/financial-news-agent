@@ -12,6 +12,7 @@ from src.analysis.analyzer import MarketImpactAnalyzer
 from src.analysis.corroborator import EventCorroborator
 from src.analysis.surge import SurgeVelocityEngine
 from src.analysis.trend import TrendEngine
+from src.analysis.technical import TradingViewEngine
 from src.notification.base import BaseNotifier
 from src.notification.telegram import TelegramNotifier
 from src.notification.console import ConsoleNotifier
@@ -199,6 +200,9 @@ class Pipeline:
         else:
             self.notifier = ConsoleNotifier()
 
+        # Technical Analysis subsystem (TradingView confluence)
+        self.technical_engine = TradingViewEngine()
+
 
     @classmethod
     def from_settings(
@@ -339,10 +343,11 @@ class Pipeline:
             articles = fresh_articles
 
         # 2. Deduplication via SQLite
-        unseen_articles = self.storage.filter_unseen(articles)
-        if self.force and not unseen_articles and articles:
-            logger.info("Force mode active and all articles previously seen: selecting the %d freshest articles for forced processing.", min(len(articles), 3))
-            unseen_articles = articles[:3]
+        if self.force:
+            logger.info("Force mode active: evaluating all %d articles in the window (bypassing SQLite deduplication).", len(articles))
+            unseen_articles = articles
+        else:
+            unseen_articles = self.storage.filter_unseen(articles)
         new_unseen_count = len(unseen_articles)
 
         analyzed_count = 0
@@ -472,6 +477,34 @@ class Pipeline:
                     if new_score >= 7 and analysis.impact_grade in (ImpactGrade.LOW, ImpactGrade.AVERAGE):
                         analysis.impact_grade = ImpactGrade.HIGH
                         analysis.is_market_moving = True
+
+            # TradingView Technical Confluence check for candidate tickers
+            if getattr(self, "technical_engine", None) is not None:
+                candidate_tickers: List[str] = []
+                if analysis.causal_chain:
+                    candidate_tickers.extend(analysis.causal_chain.beneficiaries[:2])
+                    candidate_tickers.extend(analysis.causal_chain.negatively_exposed[:2])
+                if not candidate_tickers and analysis.affected_tickers:
+                    candidate_tickers.extend(analysis.affected_tickers[:2])
+
+                seen_tech_syms = set()
+                stance_val = (
+                    analysis.directional_stance.value
+                    if hasattr(analysis.directional_stance, "value")
+                    else str(analysis.directional_stance)
+                )
+                for sym in candidate_tickers:
+                    clean_sym = str(sym).strip().upper()
+                    if clean_sym and clean_sym not in seen_tech_syms and clean_sym.startswith("$"):
+                        seen_tech_syms.add(clean_sym)
+                        try:
+                            tech_info = self.technical_engine.get_technical_summary(
+                                clean_sym, directional_stance=stance_val
+                            )
+                            if tech_info:
+                                analysis.technicals.append(tech_info)
+                        except Exception as tech_err:
+                            logger.debug("TradingView technicals failed for %s: %s", clean_sym, tech_err)
 
             # Filtering & alert criteria (enforcing Hard Gate Decision Engine)
             alert_warranted = self.should_alert(analysis)

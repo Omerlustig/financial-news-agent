@@ -424,6 +424,20 @@ class TelegramButton(BaseModel):
     url: str = Field(..., description="Target URL opened upon button click.")
 
 
+class TechnicalIndicatorSummary(BaseModel):
+    """TradingView technical indicator metrics and confluence check."""
+    symbol: str = Field(..., description="Ticker symbol (e.g. $NVDA)")
+    recommendation: str = Field(default="NEUTRAL", description="Technical consensus: STRONG_BUY, BUY, NEUTRAL, SELL, STRONG_SELL")
+    buy_votes: int = Field(default=0)
+    sell_votes: int = Field(default=0)
+    neutral_votes: int = Field(default=0)
+    rsi: Optional[float] = Field(default=None, description="14-period Relative Strength Index")
+    close_price: Optional[float] = Field(default=None, description="Current market / close price")
+    sma50: Optional[float] = Field(default=None, description="50-day Simple Moving Average")
+    sma200: Optional[float] = Field(default=None, description="200-day Simple Moving Average")
+    confluence_note: Optional[str] = Field(default=None, description="Confluence check comparing news stance with technical setup")
+
+
 class MarketImpactAnalysis(BaseModel):
     """Institutional financial analyst reasoning and scoring output."""
     is_market_moving: bool = Field(
@@ -523,6 +537,10 @@ class MarketImpactAnalysis(BaseModel):
     sector_trends: List[SectorTrendMetrics] = Field(
         default_factory=list,
         description="Sector sentiment momentum metrics for affected sectors",
+    )
+    technicals: List[TechnicalIndicatorSummary] = Field(
+        default_factory=list,
+        description="TradingView technical indicators for primary affected tickers",
     )
     disclaimer: str = Field(
         default="⚠️ News-derived hypothesis. Market pricing, valuation, and entry points were not checked.",
