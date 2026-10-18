@@ -282,6 +282,8 @@ jobs:
 
 ## Telegram Integration Guide
 
+> 📖 **Detailed Guide**: A standalone, illustrated guide with troubleshooting tips and screenshots is available at [`docs/telegram_setup_guide.md`](docs/telegram_setup_guide.md).
+
 The agent delivers high-priority institutional alerts in structured HTML with impact classification tags, confidence scoring, affected tickers, and analytical catalysts.
 
 ### Step 1: Create a Bot with @BotFather
