@@ -3,6 +3,7 @@
     {
       "source": "news-agent",
       "codebase": "default",
+      "runtime": "python312",
       "ignore": [
         "venv",
         ".git",

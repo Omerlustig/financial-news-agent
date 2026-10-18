@@ -113,6 +113,7 @@ if _FIREBASE_AVAILABLE:
         schedule="every 15 minutes",
         timeout_sec=300,
         memory=options.MemoryOption.MB_512,
+        region="us-central1",
     )
     def scan_financial_news(event: scheduler_fn.ScheduledEvent) -> None:
         """Triggered automatically every 15 minutes by Cloud Scheduler."""
