@@ -347,6 +347,7 @@ def format_telegram_message(
                 analysis.sentiment.label, "value", str(analysis.sentiment.label)
             ).upper().replace(" ", "_")
 
+    # Visual Sentiment & Trend metrics (Compact)
     emoji_badges = {
         "VERY_BULLISH": "🚀 VERY BULLISH",
         "BULLISH": "🟢 BULLISH",
@@ -387,21 +388,58 @@ def format_telegram_message(
             beneficiaries = analysis.affected_tickers
             negatively_exposed = []
 
+    # Clean empty lists
+    beneficiaries = [b for b in beneficiaries if b and b != "None"]
+    negatively_exposed = [e for e in negatively_exposed if e and e != "None"]
+
+    # Recommendation / Actionable Takeaway
+    rec = getattr(analysis, "recommendation", None)
+    if not rec:
+        if beneficiaries:
+            rec = f"Monitor {', '.join(beneficiaries)} for catalyst follow-through over {horizon_val or 'short term'}; watch counterarguments."
+        elif sectors and sectors != ["None"] and "BULL" in str(stance_val):
+            rec = f"Evaluate overweight positioning on {sectors_str} sector over {horizon_val or 'short term'}."
+        elif sectors and sectors != ["None"] and "BEAR" in str(stance_val):
+            rec = f"Exercise caution or evaluate hedge protection on {sectors_str} sector."
+        elif negatively_exposed:
+            rec = f"Exercise caution or evaluate hedge protection on {', '.join(negatively_exposed)}."
+        else:
+            rec = "Track subsequent corporate disclosures and primary filings for tradeable confirmation."
+
+    # ==============================================================
+    # 🎯 1. BOTTOM LINE (Top priority: recommendation + positioning)
+    # ==============================================================
+    lines.append("")
+    lines.append("🎯 <b>BOTTOM LINE:</b>")
+    lines.append(f"💡 <b>Recommendation:</b> {escape_html(rec)}")
+
+    action_summary_items: List[str] = []
     if beneficiaries:
-        beneficiaries_str = ", ".join(beneficiaries)
-    elif sectors and sectors != ["None"] and ("BULL" in stance_val or "VOL" in stance_val):
-        beneficiaries_str = f"{sectors_str} (Sector-wide play)"
-    else:
-        beneficiaries_str = "None"
+        action_summary_items.append(f"🟢 <b>Favor:</b> {', '.join(beneficiaries)}")
+    if negatively_exposed:
+        action_summary_items.append(f"🔴 <b>Avoid/Hedge:</b> {', '.join(negatively_exposed)}")
+    if not action_summary_items and sectors and sectors != ["None"]:
+        action_summary_items.append(f"🏭 <b>In Play:</b> {sectors_str}")
+
+    if action_summary_items:
+        lines.append(f"👉 <b>Actionable Positioning:</b> {' | '.join(action_summary_items)}")
+
+    # Concise single-line rationale for top tickers
+    if beneficiaries:
+        top_b = beneficiaries[0]
+        b_with_co = format_ticker_with_company(top_b)
+        b_reason = get_simple_reason_for_beneficiary(top_b, analysis)
+        lines.append(f"   • 🟢 <b>{escape_html(b_with_co)}:</b> {escape_html(b_reason)}")
 
     if negatively_exposed:
-        negatively_exposed_str = ", ".join(negatively_exposed)
-    elif sectors and sectors != ["None"] and "BEAR" in stance_val:
-        negatively_exposed_str = f"{sectors_str} (Sector-wide exposure)"
-    else:
-        negatively_exposed_str = "None"
+        top_e = negatively_exposed[0]
+        e_with_co = format_ticker_with_company(top_e)
+        e_reason = get_simple_reason_for_exposed(top_e, analysis)
+        lines.append(f"   • 🔴 <b>{escape_html(e_with_co)}:</b> {escape_html(e_reason)}")
 
-    # Executive Summary & Mechanism text
+    # ==============================================================
+    # 📖 2. THE CATALYST (Short, focused explanation of what happened & why)
+    # ==============================================================
     summary = analysis.summary
     if not summary and analysis.causal_chain and analysis.causal_chain.event_facts:
         summary = analysis.causal_chain.event_facts
@@ -414,126 +452,39 @@ def format_telegram_message(
     else:
         mechanism = "None"
 
-    # Recommendation / Actionable Takeaway
-    rec = getattr(analysis, "recommendation", None)
-    if not rec:
-        if beneficiaries:
-            rec = f"Monitor {', '.join(beneficiaries)} for catalyst follow-through over {horizon_val or 'short term'}; watch counterarguments."
-        elif sectors and sectors != ["None"] and "BULL" in stance_val:
-            rec = f"Evaluate overweight positioning on {sectors_str} sector/industry ETFs over {horizon_val or 'short term'}."
-        elif sectors and sectors != ["None"] and "BEAR" in stance_val:
-            rec = f"Exercise caution or evaluate hedge protection on {sectors_str} sector."
-        elif negatively_exposed:
-            rec = f"Exercise caution or evaluate hedge protection on {', '.join(negatively_exposed)}."
-        else:
-            rec = "Track subsequent corporate disclosures and primary filings for tradeable volume confirmation."
-
-    # 1. 📖 SIMPLE EXPLANATION (Plain English with 'Because' reasoning)
-    direction_desc = get_directional_simple_explanation(stance_val, sectors)
-    simple_event = article.title
     lines.append("")
-    lines.append("📖 <b>SIMPLE EXPLANATION:</b>")
-    lines.append(f"• <b>Event:</b> {escape_html(simple_event)}")
-    lines.append(f"• <b>Direction:</b> <b>{escape_html(stance_val or 'NEUTRAL')}</b> ({escape_html(direction_desc)})")
-    lines.append("• <b>Actionable Positioning:</b>")
+    lines.append("📖 <b>THE CATALYST:</b>")
+    lines.append(f"• <b>Event:</b> {escape_html(summary_text)}")
+    if mechanism and mechanism != "None" and mechanism != summary_text:
+        lines.append(f"• <b>Why it matters:</b> {escape_html(mechanism)}")
 
-    if beneficiaries and beneficiaries != ["None"]:
-        for b in beneficiaries[:3]:
-            b_with_co = format_ticker_with_company(b)
-            b_reason = get_simple_reason_for_beneficiary(b, analysis)
-            lines.append(f"    • 🟢 <b>Favor {escape_html(b_with_co)}</b> → {escape_html(b_reason)}")
-    elif sectors and sectors != ["None"]:
-        lines.append(f"    • 🟢 <b>Favor {escape_html(sectors_str)}</b> → Because sector-wide tailwinds expand operating margins.")
+    # ==============================================================
+    # ⚖️ 3. RISK & INVALIDATION (Counterarguments & thesis invalidation)
+    # ==============================================================
+    counterarguments = (
+        analysis.causal_chain.counterarguments
+        if analysis.causal_chain and analysis.causal_chain.counterarguments and analysis.causal_chain.counterarguments != "None"
+        else None
+    )
+    invalidation = (
+        analysis.causal_chain.invalidation_conditions
+        if analysis.causal_chain and analysis.causal_chain.invalidation_conditions and analysis.causal_chain.invalidation_conditions != "None"
+        else None
+    )
 
-    if negatively_exposed and negatively_exposed != ["None"]:
-        for e in negatively_exposed[:3]:
-            e_with_co = format_ticker_with_company(e)
-            e_reason = get_simple_reason_for_exposed(e, analysis)
-            lines.append(f"    • 🔴 <b>Avoid {escape_html(e_with_co)}</b> → {escape_html(e_reason)}")
-    elif sectors and sectors != ["None"] and "BEAR" in str(stance_val):
-        lines.append(f"    • 🔴 <b>Avoid {escape_html(sectors_str)}</b> → Because sector-wide headwinds compress valuation multiples.")
-
-    # Executive Summary (Detailed Facts)
-    lines.append("")
-    lines.append("<b>Executive Summary:</b>")
-    lines.append(escape_html(summary_text))
-
-    # Causal Mechanism
-    lines.append("")
-    lines.append("<b>Causal Mechanism:</b>")
-    lines.append(escape_html(mechanism))
-
-    # Beneficiaries vs Negatively Exposed
-    lines.append("")
-    lines.append(f"🟢 <b>Beneficiaries:</b> {escape_html(beneficiaries_str)}")
-    lines.append(f"🔴 <b>Negatively Exposed:</b> {escape_html(negatively_exposed_str)}")
-
-    # Final Conclusion Brief regarding this push
-    actionable_summary_parts: List[str] = []
-    if beneficiaries and beneficiaries != ["None"]:
-        actionable_summary_parts.append(f"Favor: {', '.join(beneficiaries)}")
-    if negatively_exposed and negatively_exposed != ["None"]:
-        actionable_summary_parts.append(f"Avoid/Hedge: {', '.join(negatively_exposed)}")
-    if not actionable_summary_parts and sectors and sectors != ["None"]:
-        actionable_summary_parts.append(f"Sector: {sectors_str}")
-
-    conclusion_body = rec
-    if not conclusion_body or conclusion_body == "None":
-        if analysis.causal_chain and analysis.causal_chain.economic_mechanism:
-            conclusion_body = analysis.causal_chain.economic_mechanism
-        elif analysis.catalyst_thesis:
-            conclusion_body = analysis.catalyst_thesis
-        else:
-            conclusion_body = summary_text
-
-    lines.append("")
-    lines.append("🎯 <b>FINAL CONCLUSION & BOTTOM LINE:</b>")
-    lines.append(f"📌 {escape_html(conclusion_body)}")
-    if actionable_summary_parts:
-        lines.append(f"👉 <b>Actionable Positioning:</b> {escape_html(' | '.join(actionable_summary_parts))}")
-
-    lines.append("")
-    lines.append(f"💡 <b>Recommendation:</b> {escape_html(rec)}")
-
-    # Counterarguments & Invalidation
-    if analysis.causal_chain and analysis.causal_chain.counterarguments:
-        counterarguments = analysis.causal_chain.counterarguments
-    else:
-        counterarguments = "None"
-
-    if analysis.causal_chain and analysis.causal_chain.invalidation_conditions:
-        invalidation = analysis.causal_chain.invalidation_conditions
-    else:
-        invalidation = "None"
-
-    lines.append("")
-    lines.append(f"⚖️ <b>Counterarguments:</b> {escape_html(counterarguments)}")
-    lines.append(f"🛑 <b>Invalidation Condition:</b> {escape_html(invalidation)}")
+    if counterarguments or invalidation:
+        lines.append("")
+        lines.append("⚖️ <b>RISK & INVALIDATION:</b>")
+        if counterarguments:
+            lines.append(f"• <b>Risk:</b> {escape_html(counterarguments)}")
+        if invalidation:
+            lines.append(f"• <b>Invalidation:</b> {escape_html(invalidation)}")
 
     # Direct URL Link
     escaped_url_attr = html.escape(article.url, quote=True)
     escaped_url_text = escape_html(article.url)
     lines.append("")
     lines.append(f'🔗 <a href="{escaped_url_attr}">{escaped_url_text}</a>')
-
-    # 2. 🏁 OVERALL BOTTOM LINE (The last thing in the message, right before disclaimer)
-    lines.append("")
-    lines.append("🏁 <b>OVERALL BOTTOM LINE:</b>")
-    lines.append(f"• <b>Event:</b> {escape_html(summary_text)}")
-    if mechanism and mechanism != "None" and mechanism != summary_text:
-        lines.append(f"• <b>Mechanism:</b> {escape_html(mechanism)}")
-
-    action_summary_items = []
-    if beneficiaries and beneficiaries != ["None"]:
-        action_summary_items.append(f"🟢 Favor: {', '.join(beneficiaries)}")
-    if negatively_exposed and negatively_exposed != ["None"]:
-        action_summary_items.append(f"🔴 Avoid: {', '.join(negatively_exposed)}")
-    if not action_summary_items and sectors and sectors != ["None"]:
-        action_summary_items.append(f"🏭 In Play: {sectors_str}")
-    if action_summary_items:
-        lines.append(f"• <b>Action:</b> {escape_html(' | '.join(action_summary_items))}")
-
-    lines.append(f"• <b>Takeaway:</b> {escape_html(rec)}")
 
     # Mandatory Disclaimer at footer
     disclaimer_text = (

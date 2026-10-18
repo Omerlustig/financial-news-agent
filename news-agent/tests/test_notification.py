@@ -461,42 +461,27 @@ def test_telegram_message_formatting_institutional_causal_chain():
     assert "<b>Headline:</b> US Grants Advanced Semiconductor Export Exemptions to Allied Defense Consortium" in msg
     assert "<b>Publisher:</b> Reuters | <b>Published:</b> 2026-10-17 16:45 UTC" in msg
 
-    # 5. Executive Summary
-    assert "<b>Executive Summary:</b>" in msg
-    assert "US Commerce Department granted expedited semiconductor export licensing to defense partners." in msg
-
-    # 6. Causal Mechanism
-    assert "<b>Causal Mechanism:</b>" in msg
-    assert "Eliminates 6-9 month export review cycle, accelerating booked backlog recognition and gross margins." in msg
-
-    # 7. Beneficiaries vs Negatively Exposed
-    assert "🟢 <b>Beneficiaries:</b> $NVDA, $AVGO" in msg
-    # Simple Explanation block
-    assert "📖 <b>SIMPLE EXPLANATION:</b>" in msg
-    assert "• <b>Event:</b>" in msg
-    assert "• <b>Direction:</b>" in msg
-    assert "• <b>Actionable Positioning:</b>" in msg
-    assert "→ Because" in msg
-
-    # Recommendation & Final Conclusion Brief
+    # 5. Bottom Line & Actionable Positioning
+    assert "🎯 <b>BOTTOM LINE:</b>" in msg
     assert "💡 <b>Recommendation:</b>" in msg
-    assert "🎯 <b>FINAL CONCLUSION & BOTTOM LINE:</b>" in msg
-    assert "Actionable Positioning:" in msg
+    assert "👉 <b>Actionable Positioning:</b>" in msg
+    assert "🟢 <b>Favor:</b> $NVDA, $AVGO" in msg
+    assert "🔴 <b>Avoid/Hedge:</b> $INTC" in msg
 
-    # 8. Counterarguments & Invalidation
-    assert "⚖️ <b>Counterarguments:</b> Legislative challenge in Congress could delay implementation window by 60 days." in msg
-    assert "🛑 <b>Invalidation Condition:</b> Federal register rule revocation or injunction issued by trade court." in msg
+    # 6. The Catalyst (Event & Why it matters)
+    assert "📖 <b>THE CATALYST:</b>" in msg
+    assert "• <b>Event:</b> US Commerce Department granted expedited semiconductor export licensing to defense partners." in msg
+    assert "• <b>Why it matters:</b> Eliminates 6-9 month export review cycle, accelerating booked backlog recognition and gross margins." in msg
 
-    # 9. Direct URL Link
+    # 7. Risk & Invalidation
+    assert "⚖️ <b>RISK & INVALIDATION:</b>" in msg
+    assert "• <b>Risk:</b> Legislative challenge in Congress could delay implementation window by 60 days." in msg
+    assert "• <b>Invalidation:</b> Federal register rule revocation or injunction issued by trade court." in msg
+
+    # 8. Direct URL Link
     assert '<a href="https://reuters.com/business/semiconductors-allied-exemption">https://reuters.com/business/semiconductors-allied-exemption</a>' in msg
 
-    # 10. OVERALL BOTTOM LINE at very end (after link and before disclaimer)
-    assert "🏁 <b>OVERALL BOTTOM LINE:</b>" in msg
-    url_idx = msg.find('<a href="https://reuters.com/business/semiconductors-allied-exemption">')
-    bottom_line_idx = msg.find("🏁 <b>OVERALL BOTTOM LINE:</b>")
-    assert bottom_line_idx > url_idx, "Overall bottom line must be positioned at the end of the message!"
-
-    # 11. Mandatory Disclaimer at footer
+    # 9. Mandatory Disclaimer at footer
     assert "<i>⚠️ News-derived hypothesis. Market pricing, valuation, and entry points were not checked.</i>" in msg
 
 
