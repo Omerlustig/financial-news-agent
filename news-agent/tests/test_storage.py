@@ -251,11 +251,11 @@ def test_wal_mode_and_pragmas(tmp_path):
 
     conn = sqlite3.connect(db_path)
     journal_mode = conn.execute("PRAGMA journal_mode;").fetchone()[0]
-    synchronous = conn.execute("PRAGMA synchronous;").fetchone()[0]
     conn.close()
 
     assert journal_mode.lower() == "wal"
-    # synchronous 1 corresponds to NORMAL
+    # PRAGMA synchronous is connection-scoped; check on the active storage connection (1 = NORMAL)
+    synchronous = storage._conn.execute("PRAGMA synchronous;").fetchone()[0]
     assert synchronous == 1
     storage.close()
 
