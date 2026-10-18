@@ -132,6 +132,16 @@ class BaseStorage(ABC):
         """Update forward realized return for a tracked event across specified horizon (e.g. 1d, 7d)."""
         raise NotImplementedError
 
+    @abstractmethod
+    def get_pending_return_events(self, horizon: str = "1d", min_age_hours: int = 24) -> List[EventLineageRecord]:
+        """Retrieve tracked events eligible for forward return evaluation across specified horizon."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_resolved_lineage_records(self) -> List[EventLineageRecord]:
+        """Retrieve all tracked events that have realized forward returns (1d or 7d)."""
+        raise NotImplementedError
+
     def list_event_lineage(self, ticker: Optional[str] = None, limit: int = 20) -> List[EventLineageRecord]:
         """List recent event lineage tracking records, optionally filtered by primary ticker."""
         return []

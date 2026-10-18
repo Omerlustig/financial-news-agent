@@ -12,6 +12,7 @@ from src.analysis.sentiment_4d import FourDimensionalSentimentAnalyzer
 from src.analysis.challenger import AdversarialChallenger
 from src.analysis.technical import TradingViewEngine
 from src.analysis.decision_gate import TwoLayerGateEngine
+from src.analysis.performance import PerformanceTrackerEngine
 
 __all__ = [
     "build_analyst_prompt",
@@ -32,6 +33,7 @@ __all__ = [
     "AdversarialChallenger",
     "TradingViewEngine",
     "TwoLayerGateEngine",
+    "PerformanceTrackerEngine",
 ]
 
 

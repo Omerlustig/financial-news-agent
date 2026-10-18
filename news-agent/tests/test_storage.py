@@ -1542,6 +1542,157 @@ def test_storage_schema_migration_includes_event_lineage(tmp_path):
     storage.close()
 
 
+def test_event_lineage_directional_stance_and_pending_resolved_queries(tmp_path):
+    storage = SQLiteStorage(str(tmp_path / "lineage_perf.db"))
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    # 1. Event eligible for 1d return (age 30h, initial price set, return 1d is None)
+    ev_pending_1d = EventLineageRecord(
+        event_id="evt_pending_1d",
+        title="NVIDIA announces new enterprise GPU line",
+        primary_ticker="$NVDA",
+        first_seen=now - datetime.timedelta(hours=30),
+        last_updated=now - datetime.timedelta(hours=30),
+        source_count=2,
+        all_sources=["Reuters", "Bloomberg"],
+        event_quality_score=8.5,
+        opportunity_score=8.0,
+        status="ALERT",
+        directional_stance="BULLISH",
+        initial_price=125.0,
+        subsequent_return_1d=None,
+        subsequent_return_7d=None,
+    )
+    storage.record_event_lineage(ev_pending_1d)
+
+    # 2. Event too young for 1d return (age 5h)
+    ev_too_young = EventLineageRecord(
+        event_id="evt_too_young",
+        title="Apple launches updated Mac Studio",
+        primary_ticker="$AAPL",
+        first_seen=now - datetime.timedelta(hours=5),
+        last_updated=now - datetime.timedelta(hours=5),
+        source_count=1,
+        all_sources=["CNBC"],
+        event_quality_score=8.0,
+        opportunity_score=7.5,
+        status="ALERT",
+        directional_stance="BULLISH",
+        initial_price=220.0,
+        subsequent_return_1d=None,
+    )
+    storage.record_event_lineage(ev_too_young)
+
+    # 3. Event missing initial price
+    ev_no_price = EventLineageRecord(
+        event_id="evt_no_price",
+        title="Tesla expands Gigafactory Mexico site",
+        primary_ticker="$TSLA",
+        first_seen=now - datetime.timedelta(hours=40),
+        last_updated=now - datetime.timedelta(hours=40),
+        source_count=1,
+        all_sources=["Electrek"],
+        directional_stance="BULLISH",
+        initial_price=None,
+    )
+    storage.record_event_lineage(ev_no_price)
+
+    # 4. Resolved event (has 1d return already)
+    ev_resolved = EventLineageRecord(
+        event_id="evt_resolved",
+        title="Microsoft cuts neocloud data center lease",
+        primary_ticker="$MSFT",
+        first_seen=now - datetime.timedelta(hours=50),
+        last_updated=now - datetime.timedelta(hours=26),
+        source_count=3,
+        all_sources=["Financial Times", "Bloomberg", "The Information"],
+        event_quality_score=9.0,
+        opportunity_score=8.5,
+        status="ALERT",
+        directional_stance="BEARISH",
+        initial_price=420.0,
+        subsequent_return_1d=-1.85,
+        subsequent_return_7d=None,
+    )
+    storage.record_event_lineage(ev_resolved)
+
+    # Verify directional_stance retrieval
+    fetched_resolved = storage.get_event_lineage("evt_resolved")
+    assert fetched_resolved is not None
+    assert fetched_resolved.directional_stance == "BEARISH"
+
+    fetched_pending = storage.get_event_lineage("evt_pending_1d")
+    assert fetched_pending is not None
+    assert fetched_pending.directional_stance == "BULLISH"
+
+    # Query pending 1d events (min age 24h)
+    pending_1d = storage.get_pending_return_events(horizon="1d", min_age_hours=24)
+    assert len(pending_1d) == 1
+    assert pending_1d[0].event_id == "evt_pending_1d"
+    assert pending_1d[0].directional_stance == "BULLISH"
+
+    # Query resolved records
+    resolved_list = storage.get_resolved_lineage_records()
+    assert len(resolved_list) == 1
+    assert resolved_list[0].event_id == "evt_resolved"
+    assert resolved_list[0].subsequent_return_1d == pytest.approx(-1.85)
+
+    storage.close()
+
+
+def test_storage_schema_migration_includes_lineage_directional_stance(tmp_path):
+    db_file = tmp_path / "legacy_lineage_no_stance.db"
+    conn = sqlite3.connect(str(db_file))
+    conn.execute(
+        """
+        CREATE TABLE event_lineage (
+            event_id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            primary_ticker TEXT,
+            first_seen TIMESTAMP NOT NULL,
+            last_updated TIMESTAMP NOT NULL,
+            source_count INTEGER DEFAULT 1,
+            all_sources TEXT,
+            event_quality_score REAL DEFAULT 0.0,
+            opportunity_score REAL DEFAULT 0.0,
+            status TEXT DEFAULT 'WATCHLIST',
+            initial_price REAL,
+            subsequent_return_1d REAL,
+            subsequent_return_7d REAL
+        );
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO event_lineage (
+            event_id, title, primary_ticker, first_seen, last_updated
+        ) VALUES ('evt_legacy_1', 'Legacy Event', '$NVDA', '2026-10-18T10:00:00', '2026-10-18T10:00:00');
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    # Open with SQLiteStorage - triggers migration
+    storage = SQLiteStorage(str(db_file))
+    rec = storage.get_event_lineage("evt_legacy_1")
+    assert rec is not None
+    assert rec.directional_stance in (None, "NEUTRAL")
+
+    # Record updated record with stance
+    updated = EventLineageRecord(
+        event_id="evt_legacy_1",
+        title="Legacy Event Updated",
+        primary_ticker="$NVDA",
+        directional_stance="BULLISH",
+    )
+    storage.record_event_lineage(updated)
+    fetched = storage.get_event_lineage("evt_legacy_1")
+    assert fetched.directional_stance == "BULLISH"
+
+    storage.close()
+
+
+
 
 
 

@@ -37,7 +37,8 @@ from src.pipeline import Pipeline
 from src.storage.sqlite import SQLiteStorage
 from src.analysis.digest import MarketDigestGenerator
 from src.analysis.trend import TrendEngine
-from src.models import RawArticle, MarketImpactAnalysis, ImpactGrade
+from src.analysis.performance import PerformanceTrackerEngine
+from src.models import RawArticle, MarketImpactAnalysis, ImpactGrade, CredibilityTier
 
 
 logging.basicConfig(
@@ -920,6 +921,209 @@ def history(
 
         console.print()
         console.print(table)
+        console.print()
+    finally:
+        storage.close()
+
+
+@app.command("performance")
+def performance(
+    update: bool = typer.Option(False, "--update", "-u", help="Automatically fetch latest quotes and update forward returns for eligible catalysts"),
+    ticker: Optional[str] = typer.Option(None, "--ticker", "-t", help="Filter performance tracking by ticker symbol (e.g. $NVDA)"),
+    source: Optional[str] = typer.Option(None, "--source", "-s", help="Filter performance tracking by publisher / source name"),
+    min_opportunity: float = typer.Option(6.0, "--min-opportunity", "-o", help="Minimum opportunity score threshold"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to settings.yaml"),
+    db: Optional[str] = typer.Option(None, "--db", help="Override SQLite database path"),
+) -> None:
+    """Evaluate empirical forward return tracking, directional alpha, and publisher credibility scorecards."""
+    settings = load_settings(config)
+    db_path = db or settings.agent.database_path
+
+    storage = SQLiteStorage(db_path)
+    engine = PerformanceTrackerEngine()
+    try:
+        if update:
+            from src.analysis.technical import TradingViewEngine
+            tv_engine = TradingViewEngine()
+
+            def fetch_quote(sym: str) -> Optional[float]:
+                try:
+                    summary = tv_engine.get_technical_summary(sym)
+                    return summary.close_price if summary else None
+                except Exception:
+                    return None
+
+            update_counts = engine.update_forward_returns(storage, price_fetcher=fetch_quote)
+            total_upd = update_counts.get("updated_1d", 0) + update_counts.get("updated_7d", 0)
+            console.print(f"[bold green]✓ Updated {total_upd} forward return quote(s) ({update_counts.get('updated_1d', 0)} 1d, {update_counts.get('updated_7d', 0)} 7d).[/bold green]\n")
+
+        summary = engine.calculate_performance_metrics(
+            storage, min_opportunity=min_opportunity, ticker=ticker, source=source
+        )
+
+        if summary.total_catalysts == 0:
+            filter_msg = []
+            if ticker:
+                filter_msg.append(f"ticker '{ticker}'")
+            if source:
+                filter_msg.append(f"source '{source}'")
+            filter_str = f" for {', '.join(filter_msg)}" if filter_msg else ""
+            console.print(f"[yellow]No realized catalyst return records found in database ({db_path}){filter_str}.[/yellow]")
+            return
+
+        # 1. Global Metrics Panel
+        hr_1d_color = "green" if summary.hit_rate_1d_pct >= 55.0 else ("red" if summary.hit_rate_1d_pct < 45.0 else "yellow")
+        alpha_1d_color = "green" if summary.avg_alpha_1d_pct > 0 else "red"
+        hr_7d_color = "green" if summary.hit_rate_7d_pct >= 55.0 else ("red" if summary.hit_rate_7d_pct < 45.0 else "yellow")
+        alpha_7d_color = "green" if summary.avg_alpha_7d_pct > 0 else "red"
+
+        metrics_table = Table.grid(padding=(0, 2))
+        metrics_table.add_column("Metric", style="bold")
+        metrics_table.add_column("1-Day Forward", style="cyan")
+        metrics_table.add_column("7-Day Forward", style="magenta")
+
+        metrics_table.add_row(
+            "Resolved Catalysts:",
+            f"{summary.resolved_1d} / {summary.total_catalysts}",
+            f"{summary.resolved_7d} / {summary.total_catalysts}",
+        )
+        metrics_table.add_row(
+            "Wins / Losses:",
+            f"{summary.wins_1d}W / {summary.losses_1d}L",
+            f"{summary.wins_7d}W / {summary.losses_7d}L",
+        )
+        metrics_table.add_row(
+            "Directional Hit Rate:",
+            f"[{hr_1d_color} bold]{summary.hit_rate_1d_pct:.1f}%[/{hr_1d_color} bold]",
+            f"[{hr_7d_color} bold]{summary.hit_rate_7d_pct:.1f}%[/{hr_7d_color} bold]",
+        )
+        metrics_table.add_row(
+            "Average Raw Return:",
+            f"{summary.avg_return_1d_pct:+.2f}%",
+            f"{summary.avg_return_7d_pct:+.2f}%",
+        )
+        metrics_table.add_row(
+            "Average Directional Alpha:",
+            f"[{alpha_1d_color} bold]{summary.avg_alpha_1d_pct:+.2f}%[/{alpha_1d_color} bold]",
+            f"[{alpha_7d_color} bold]{summary.avg_alpha_7d_pct:+.2f}%[/{alpha_7d_color} bold]",
+        )
+
+        global_panel = Panel(
+            metrics_table,
+            title="🎯 GLOBAL ALPHA & HIT RATE METRICS",
+            border_style="green",
+            expand=False,
+        )
+        console.print()
+        console.print(global_panel)
+
+        # 2. Publisher Credibility Scorecard
+        scorecard_table = Table(title="📰 PUBLISHER CREDIBILITY SCORECARD")
+        scorecard_table.add_column("Publisher / Source", style="bold")
+        scorecard_table.add_column("Catalysts", justify="center")
+        scorecard_table.add_column("Avg Quality", justify="right")
+        scorecard_table.add_column("1d Hit Rate", justify="right")
+        scorecard_table.add_column("Avg 1d Alpha", justify="right")
+        scorecard_table.add_column("Avg 7d Alpha", justify="right")
+        scorecard_table.add_column("Credibility Tier", justify="center")
+
+        for pub in summary.source_scorecard:
+            hr_col = "green" if pub.hit_rate_pct >= 55.0 else ("red" if pub.hit_rate_pct < 45.0 else "yellow")
+            a1_col = "green" if pub.avg_alpha_1d_pct > 0 else "red"
+            a7_col = "green" if pub.avg_alpha_7d_pct > 0 else "red"
+
+            tier_str = str(pub.credibility_tier.value if hasattr(pub.credibility_tier, "value") else pub.credibility_tier)
+            if "TIER_A" in tier_str:
+                tier_badge = "[bold green]🌟 TIER A (ALPHA)[/bold green]"
+            elif "TIER_B" in tier_str:
+                tier_badge = "[bold cyan]🟢 TIER B (RELIABLE)[/bold cyan]"
+            elif "TIER_C" in tier_str:
+                tier_badge = "[yellow]🟡 TIER C (NEUTRAL)[/yellow]"
+            else:
+                tier_badge = "[bold red]🔴 TIER D (UNRELIABLE)[/bold red]"
+
+            scorecard_table.add_row(
+                pub.source_name,
+                str(pub.total_events),
+                f"{pub.avg_quality_score:.1f}/10",
+                f"[{hr_col}]{pub.hit_rate_pct:.1f}%[/{hr_col}]",
+                f"[{a1_col}]{pub.avg_alpha_1d_pct:+.2f}%[/{a1_col}]",
+                f"[{a7_col}]{pub.avg_alpha_7d_pct:+.2f}%[/{a7_col}]",
+                tier_badge,
+            )
+
+        console.print()
+        console.print(scorecard_table)
+
+        # 3. Realized Performance Ledger
+        records = storage.get_resolved_lineage_records()
+        ledger_table = Table(title="📊 CATALYST REALIZED RETURN LEDGER")
+        ledger_table.add_column("Event ID", style="dim", width=12)
+        ledger_table.add_column("Ticker", style="cyan bold")
+        ledger_table.add_column("Stance", justify="center")
+        ledger_table.add_column("Headline", style="bold")
+        ledger_table.add_column("Initial Price", justify="right")
+        ledger_table.add_column("1d Return", justify="right")
+        ledger_table.add_column("1d Alpha", justify="right")
+        ledger_table.add_column("7d Return", justify="right")
+        ledger_table.add_column("7d Alpha", justify="right")
+        ledger_table.add_column("Verdict", justify="center")
+
+        for ev in records:
+            if ev.opportunity_score is not None and ev.opportunity_score < min_opportunity:
+                continue
+            if ticker:
+                cl_t = ticker.strip().upper()
+                nt = cl_t[1:] if cl_t.startswith("$") else cl_t
+                et = str(ev.primary_ticker or "").strip().upper()
+                ent = et[1:] if et.startswith("$") else et
+                if nt != ent:
+                    continue
+            if source:
+                if not any(source.strip().lower() in s.lower() for s in ev.all_sources):
+                    continue
+
+            stance = ev.directional_stance or "NEUTRAL"
+            init_p = f"${ev.initial_price:.2f}" if ev.initial_price is not None else "N/A"
+
+            if ev.subsequent_return_1d is not None:
+                r1 = ev.subsequent_return_1d
+                a1 = r1 if stance == "BULLISH" else (-r1 if stance == "BEARISH" else abs(r1))
+                r1_str = f"{r1:+.2f}%"
+                a1_str = f"[green]{a1:+.2f}%[/green]" if a1 > 0 else f"[red]{a1:+.2f}%[/red]"
+                verdict = engine.classify_outcome(stance, r1)
+                verdict_str = f"[bold green]WIN[/bold green]" if verdict == "WIN" else (f"[bold red]LOSS[/bold red]" if verdict == "LOSS" else "[dim]NEUT[/dim]")
+            else:
+                r1_str = "Pending"
+                a1_str = "Pending"
+                verdict_str = "[dim]--[/dim]"
+
+            if ev.subsequent_return_7d is not None:
+                r7 = ev.subsequent_return_7d
+                a7 = r7 if stance == "BULLISH" else (-r7 if stance == "BEARISH" else abs(r7))
+                r7_str = f"{r7:+.2f}%"
+                a7_str = f"[green]{a7:+.2f}%[/green]" if a7 > 0 else f"[red]{a7:+.2f}%[/red]"
+            else:
+                r7_str = "Pending"
+                a7_str = "Pending"
+
+            stance_str = f"[green]BULL[/green]" if stance == "BULLISH" else (f"[red]BEAR[/red]" if stance == "BEARISH" else f"[yellow]{stance[:4]}[/yellow]")
+
+            ledger_table.add_row(
+                str(ev.event_id)[:12],
+                str(ev.primary_ticker or "N/A"),
+                stance_str,
+                str(ev.title)[:40],
+                init_p,
+                r1_str,
+                a1_str,
+                r7_str,
+                a7_str,
+                verdict_str,
+            )
+
+        console.print()
+        console.print(ledger_table)
         console.print()
     finally:
         storage.close()

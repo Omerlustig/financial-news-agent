@@ -137,6 +137,7 @@ class SQLiteStorage(BaseStorage):
                         event_quality_score REAL DEFAULT 0.0,
                         opportunity_score REAL DEFAULT 0.0,
                         status TEXT DEFAULT 'WATCHLIST',
+                        directional_stance TEXT DEFAULT 'NEUTRAL',
                         initial_price REAL,
                         subsequent_return_1d REAL,
                         subsequent_return_7d REAL
@@ -167,6 +168,12 @@ class SQLiteStorage(BaseStorage):
                 for col_name, col_type in new_columns:
                     if col_name not in existing_cols:
                         self._conn.execute(f"ALTER TABLE articles ADD COLUMN {col_name} {col_type};")
+
+                # Migration safety check for event_lineage columns
+                cursor_el = self._conn.execute("PRAGMA table_info(event_lineage);")
+                existing_el_cols = {row["name"] if isinstance(row, sqlite3.Row) else row[1] for row in cursor_el.fetchall()}
+                if "directional_stance" not in existing_el_cols:
+                    self._conn.execute("ALTER TABLE event_lineage ADD COLUMN directional_stance TEXT DEFAULT 'NEUTRAL';")
 
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_articles_alerted ON articles(alerted);")
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_articles_is_market_moving ON articles(is_market_moving);")
@@ -940,21 +947,27 @@ class SQLiteStorage(BaseStorage):
 
     def _row_to_event_lineage(self, row: Any) -> EventLineageRecord:
         """Convert a database row into an EventLineageRecord instance."""
-        d = dict(row) if isinstance(row, sqlite3.Row) else {
-            "event_id": row[0],
-            "title": row[1],
-            "primary_ticker": row[2],
-            "first_seen": row[3],
-            "last_updated": row[4],
-            "source_count": row[5],
-            "all_sources": row[6],
-            "event_quality_score": row[7],
-            "opportunity_score": row[8],
-            "status": row[9],
-            "initial_price": row[10],
-            "subsequent_return_1d": row[11],
-            "subsequent_return_7d": row[12],
-        }
+        if isinstance(row, sqlite3.Row):
+            d = dict(row)
+        else:
+            d = {
+                "event_id": row[0],
+                "title": row[1],
+                "primary_ticker": row[2],
+                "first_seen": row[3],
+                "last_updated": row[4],
+                "source_count": row[5],
+                "all_sources": row[6],
+                "event_quality_score": row[7],
+                "opportunity_score": row[8],
+                "status": row[9],
+                "directional_stance": row[10] if len(row) > 13 else "NEUTRAL",
+                "initial_price": row[11] if len(row) > 13 else row[10],
+                "subsequent_return_1d": row[12] if len(row) > 13 else row[11],
+                "subsequent_return_7d": row[13] if len(row) > 13 else row[12],
+            }
+        if "directional_stance" not in d or d["directional_stance"] is None:
+            d["directional_stance"] = "NEUTRAL"
         all_sources = d.get("all_sources")
         if isinstance(all_sources, str):
             try:
@@ -981,6 +994,7 @@ class SQLiteStorage(BaseStorage):
         )
         sources_json = json.dumps(event.all_sources) if event.all_sources else "[]"
         cleaned_ticker = event.primary_ticker.strip().upper() if event.primary_ticker else None
+        stance_str = event.directional_stance.strip().upper() if event.directional_stance else "NEUTRAL"
 
         sql = """
         INSERT INTO event_lineage (
@@ -994,10 +1008,11 @@ class SQLiteStorage(BaseStorage):
             event_quality_score,
             opportunity_score,
             status,
+            directional_stance,
             initial_price,
             subsequent_return_1d,
             subsequent_return_7d
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(event_id) DO UPDATE SET
             title = excluded.title,
             primary_ticker = COALESCE(excluded.primary_ticker, event_lineage.primary_ticker),
@@ -1007,6 +1022,7 @@ class SQLiteStorage(BaseStorage):
             event_quality_score = excluded.event_quality_score,
             opportunity_score = excluded.opportunity_score,
             status = excluded.status,
+            directional_stance = COALESCE(excluded.directional_stance, event_lineage.directional_stance),
             initial_price = COALESCE(excluded.initial_price, event_lineage.initial_price),
             subsequent_return_1d = COALESCE(excluded.subsequent_return_1d, event_lineage.subsequent_return_1d),
             subsequent_return_7d = COALESCE(excluded.subsequent_return_7d, event_lineage.subsequent_return_7d);
@@ -1028,6 +1044,7 @@ class SQLiteStorage(BaseStorage):
                         float(event.event_quality_score),
                         float(event.opportunity_score),
                         str(event.status),
+                        stance_str,
                         float(event.initial_price) if event.initial_price is not None else None,
                         float(event.subsequent_return_1d) if event.subsequent_return_1d is not None else None,
                         float(event.subsequent_return_7d) if event.subsequent_return_7d is not None else None,
@@ -1050,6 +1067,7 @@ class SQLiteStorage(BaseStorage):
             event_quality_score,
             opportunity_score,
             status,
+            directional_stance,
             initial_price,
             subsequent_return_1d,
             subsequent_return_7d
@@ -1080,7 +1098,6 @@ class SQLiteStorage(BaseStorage):
         else:
             candidates.append(f"${cleaned_ticker}")
 
-        # Extract normalized words from input tokens
         input_token_set = set()
         for t in title_tokens:
             words = re.findall(r"\b\w+\b", str(t).lower())
@@ -1103,6 +1120,7 @@ class SQLiteStorage(BaseStorage):
             event_quality_score,
             opportunity_score,
             status,
+            directional_stance,
             initial_price,
             subsequent_return_1d,
             subsequent_return_7d
@@ -1120,14 +1138,12 @@ class SQLiteStorage(BaseStorage):
         for row in rows:
             record = self._row_to_event_lineage(row)
 
-            # Check time window against last_updated or first_seen
             rec_dt = record.last_updated or record.first_seen
             if rec_dt:
                 rec_utc = rec_dt if rec_dt.tzinfo else rec_dt.replace(tzinfo=timezone.utc)
                 if rec_utc < cutoff_dt:
                     continue
 
-            # Check token overlap (>= 2 tokens)
             event_tokens = set(re.findall(r"\b\w+\b", record.title.lower()))
             overlap = input_token_set.intersection(event_tokens)
             if len(overlap) >= 2:
@@ -1160,6 +1176,82 @@ class SQLiteStorage(BaseStorage):
             with self._conn:
                 self._conn.execute(sql, (float(return_pct), now_str, event_id))
 
+    def get_pending_return_events(
+        self, horizon: str = "1d", min_age_hours: int = 24
+    ) -> List[EventLineageRecord]:
+        """Retrieve tracked events eligible for forward return evaluation across specified horizon."""
+        norm_h = str(horizon).lower().strip().replace("-", "_")
+        if "1d" in norm_h or "1_day" in norm_h:
+            return_col = "subsequent_return_1d"
+        elif "7d" in norm_h or "7_day" in norm_h:
+            return_col = "subsequent_return_7d"
+        else:
+            raise ValueError(f"Unsupported return horizon: {horizon}. Expected '1d' or '7d'.")
+
+        cutoff_dt = datetime.now(timezone.utc) - timedelta(hours=min_age_hours)
+        cutoff_iso = cutoff_dt.isoformat()
+
+        sql = f"""
+        SELECT
+            event_id,
+            title,
+            primary_ticker,
+            first_seen,
+            last_updated,
+            source_count,
+            all_sources,
+            event_quality_score,
+            opportunity_score,
+            status,
+            directional_stance,
+            initial_price,
+            subsequent_return_1d,
+            subsequent_return_7d
+        FROM event_lineage
+        WHERE initial_price IS NOT NULL
+          AND initial_price > 0
+          AND {return_col} IS NULL
+          AND first_seen <= ?
+        ORDER BY first_seen ASC;
+        """
+        with self._lock:
+            if self._conn is None:
+                raise RuntimeError("Database connection is closed.")
+            cursor = self._conn.cursor()
+            cursor.execute(sql, (cutoff_iso,))
+            rows = cursor.fetchall()
+            return [self._row_to_event_lineage(r) for r in rows]
+
+    def get_resolved_lineage_records(self) -> List[EventLineageRecord]:
+        """Retrieve all tracked events that have realized forward returns (1d or 7d)."""
+        sql = """
+        SELECT
+            event_id,
+            title,
+            primary_ticker,
+            first_seen,
+            last_updated,
+            source_count,
+            all_sources,
+            event_quality_score,
+            opportunity_score,
+            status,
+            directional_stance,
+            initial_price,
+            subsequent_return_1d,
+            subsequent_return_7d
+        FROM event_lineage
+        WHERE subsequent_return_1d IS NOT NULL OR subsequent_return_7d IS NOT NULL
+        ORDER BY last_updated DESC;
+        """
+        with self._lock:
+            if self._conn is None:
+                raise RuntimeError("Database connection is closed.")
+            cursor = self._conn.cursor()
+            cursor.execute(sql)
+            rows = cursor.fetchall()
+            return [self._row_to_event_lineage(r) for r in rows]
+
     def list_event_lineage(self, ticker: Optional[str] = None, limit: int = 20) -> List[EventLineageRecord]:
         """List recent event lineage tracking records, optionally filtered by primary ticker."""
         with self._lock:
@@ -1173,7 +1265,7 @@ class SQLiteStorage(BaseStorage):
                 sql = """
                 SELECT event_id, title, primary_ticker, first_seen, last_updated,
                        source_count, all_sources, event_quality_score, opportunity_score,
-                       status, initial_price, subsequent_return_1d, subsequent_return_7d
+                       status, directional_stance, initial_price, subsequent_return_1d, subsequent_return_7d
                 FROM event_lineage
                 WHERE primary_ticker = ?
                 ORDER BY last_updated DESC
@@ -1184,7 +1276,7 @@ class SQLiteStorage(BaseStorage):
                 sql = """
                 SELECT event_id, title, primary_ticker, first_seen, last_updated,
                        source_count, all_sources, event_quality_score, opportunity_score,
-                       status, initial_price, subsequent_return_1d, subsequent_return_7d
+                       status, directional_stance, initial_price, subsequent_return_1d, subsequent_return_7d
                 FROM event_lineage
                 ORDER BY last_updated DESC
                 LIMIT ?;

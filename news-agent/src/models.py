@@ -615,6 +615,55 @@ class TwoLayerGateDecision(BaseModel):
         return str(v).strip().upper()
 
 
+class CredibilityTier(str, Enum):
+    """Publisher performance credibility tiers based on empirical alpha and hit rate."""
+    TIER_A_ALPHA = "TIER_A_ALPHA"
+    TIER_B_RELIABLE = "TIER_B_RELIABLE"
+    TIER_C_NEUTRAL = "TIER_C_NEUTRAL"
+    TIER_D_UNRELIABLE = "TIER_D_UNRELIABLE"
+
+    def __str__(self) -> str:
+        return self.value
+
+    @classmethod
+    def _missing_(cls, value: object) -> Any:
+        if isinstance(value, str):
+            normalized = value.strip().upper().replace(" ", "_")
+            for member in cls:
+                if member.value == normalized:
+                    return member
+        return super()._missing_(value)
+
+
+class SourceCredibilityRecord(BaseModel):
+    """Empirical track record and reliability scorecard for an individual newsroom/publisher."""
+    source_name: str = Field(..., description="Publisher name (e.g. 'Financial Times', 'Reuters').")
+    total_events: int = Field(default=0, description="Total news events where publisher was primary or corroborator.")
+    avg_quality_score: float = Field(default=0.0, description="Average Layer 1 Event Quality Score (0-10).")
+    hit_rate_pct: float = Field(default=0.0, description="Directional recommendation hit rate (%).")
+    avg_alpha_1d_pct: float = Field(default=0.0, description="Average 1-day realized directional alpha (%).")
+    avg_alpha_7d_pct: float = Field(default=0.0, description="Average 7-day realized directional alpha (%).")
+    credibility_tier: CredibilityTier = Field(default=CredibilityTier.TIER_C_NEUTRAL, description="Assigned credibility tier.")
+
+
+class PerformanceMetricsSummary(BaseModel):
+    """Portfolio-level performance summary of realized recommendation returns and publisher scorecards."""
+    total_catalysts: int = Field(default=0, description="Total tracked tradeable catalysts.")
+    resolved_1d: int = Field(default=0, description="Catalysts with realized 1-day forward returns.")
+    resolved_7d: int = Field(default=0, description="Catalysts with realized 7-day forward returns.")
+    wins_1d: int = Field(default=0, description="1-day directional winning catalysts.")
+    losses_1d: int = Field(default=0, description="1-day directional losing catalysts.")
+    hit_rate_1d_pct: float = Field(default=0.0, description="1-day directional hit rate (%).")
+    avg_return_1d_pct: float = Field(default=0.0, description="1-day average raw return (%).")
+    avg_alpha_1d_pct: float = Field(default=0.0, description="1-day average directional alpha (%).")
+    wins_7d: int = Field(default=0, description="7-day directional winning catalysts.")
+    losses_7d: int = Field(default=0, description="7-day directional losing catalysts.")
+    hit_rate_7d_pct: float = Field(default=0.0, description="7-day directional hit rate (%).")
+    avg_return_7d_pct: float = Field(default=0.0, description="7-day average raw return (%).")
+    avg_alpha_7d_pct: float = Field(default=0.0, description="7-day average directional alpha (%).")
+    source_scorecard: List[SourceCredibilityRecord] = Field(default_factory=list, description="Scorecard breakdown by publisher.")
+
+
 class EventLineageRecord(BaseModel):
     """Persistent tracking record maintaining historical catalyst lineage and forward performance."""
     event_id: str = Field(..., description="Unique event lineage cluster identifier.")
@@ -627,9 +676,18 @@ class EventLineageRecord(BaseModel):
     event_quality_score: float = Field(default=0.0, description="Evaluated factual quality and evidence score.")
     opportunity_score: float = Field(default=0.0, description="Evaluated trade opportunity and asymmetry score.")
     status: str = Field(default="WATCHLIST", description="Workflow status (ALERT, WATCHLIST, REJECT).")
+    directional_stance: Optional[str] = Field(default="NEUTRAL", description="Directional stance: BULLISH, BEARISH, VOLATILE, NEUTRAL.")
     initial_price: Optional[float] = Field(default=None, description="Asset price at the time of initial event detection.")
     subsequent_return_1d: Optional[float] = Field(default=None, description="Realized forward asset percentage return over 1 trading day.")
     subsequent_return_7d: Optional[float] = Field(default=None, description="Realized forward asset percentage return over 7 trading days.")
+
+    @field_validator("directional_stance", mode="before")
+    @classmethod
+    def normalize_directional_stance(cls, v: Any) -> str:
+        if not v:
+            return "NEUTRAL"
+        return str(v).strip().upper()
+
 
     @field_validator("primary_ticker", mode="before")
     @classmethod

@@ -649,6 +649,7 @@ class Pipeline:
                         event_quality_score=gate_decision.event_quality_score,
                         opportunity_score=gate_decision.opportunity_score,
                         status=gate_decision.gate_verdict,
+                        directional_stance=stance_val,
                         initial_price=initial_p,
                     )
                     self.storage.record_event_lineage(lineage_rec)

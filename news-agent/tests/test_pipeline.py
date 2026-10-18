@@ -1370,6 +1370,7 @@ def test_pipeline_six_stage_execution_cycle_records_lineage_and_evaluates_gates(
         FourDimensionalSentiment,
         NoveltyState,
         ProvenanceLevel,
+        TechnicalIndicatorSummary,
     )
 
     db_file = str(tmp_path / "test_lineage_pipeline.db")
@@ -1417,10 +1418,17 @@ def test_pipeline_six_stage_execution_cycle_records_lineage_and_evaluates_gates(
     )
     mock_analyzer.analyze.return_value = analysis
 
+    mock_technical = MagicMock()
+    mock_technical.get_technical_summary.return_value = TechnicalIndicatorSummary(
+        symbol="$NVDA", recommendation="STRONG_BUY", close_price=125.0
+    )
+    mock_technical.calculate_technical_confluence.return_value = (0.5, "Strong Bullish Confluence", {})
+
     pipeline = Pipeline(
         storage=storage,
         analyzer=mock_analyzer,
         notifier=mock_notifier,
+        technical_engine=mock_technical,
         min_score=7,
     )
 
@@ -1438,6 +1446,8 @@ def test_pipeline_six_stage_execution_cycle_records_lineage_and_evaluates_gates(
     assert rec.event_quality_score >= 8.0
     assert rec.opportunity_score >= 7.0
     assert rec.status == "ALERT"
+    assert rec.directional_stance == "BULLISH"
+    assert rec.initial_price == pytest.approx(125.0)
 
 
 def test_pipeline_high_event_quality_low_opportunity_held_in_watchlist(tmp_path):

@@ -212,3 +212,105 @@ def test_history_command_populated(temp_cli_db):
     assert "ALERT" in result.stdout
     assert "125" in result.stdout
 
+
+def test_performance_command_empty(temp_cli_db):
+    """Verify performance command informs user when no realized catalyst return records exist."""
+    _, db_path = temp_cli_db
+    runner = CliRunner()
+    result = runner.invoke(app, ["performance", "--db", db_path])
+
+    assert result.exit_code == 0
+    assert "No realized catalyst return records found" in result.stdout
+
+
+def test_performance_command_populated(temp_cli_db):
+    """Verify performance command displays Global Metrics, Publisher Scorecard, and Realized Return Ledger."""
+    from src.models import EventLineageRecord
+
+    storage, db_path = temp_cli_db
+    now = datetime.now(timezone.utc)
+
+    # 1. Bullish win on Reuters / Bloomberg
+    ev1 = EventLineageRecord(
+        event_id="evt_win_nvda",
+        title="NVIDIA secures cloud supply contract",
+        primary_ticker="$NVDA",
+        first_seen=now,
+        last_updated=now,
+        source_count=2,
+        all_sources=["Reuters", "Bloomberg"],
+        event_quality_score=9.0,
+        opportunity_score=8.5,
+        status="ALERT",
+        directional_stance="BULLISH",
+        initial_price=120.0,
+        subsequent_return_1d=4.5,
+        subsequent_return_7d=8.0,
+    )
+    storage.record_event_lineage(ev1)
+
+    # 2. Bearish win on Financial Times
+    ev2 = EventLineageRecord(
+        event_id="evt_win_msft",
+        title="Microsoft cancels datacenter expansion",
+        primary_ticker="$MSFT",
+        first_seen=now,
+        last_updated=now,
+        source_count=1,
+        all_sources=["Financial Times"],
+        event_quality_score=9.0,
+        opportunity_score=8.0,
+        status="ALERT",
+        directional_stance="BEARISH",
+        initial_price=420.0,
+        subsequent_return_1d=-3.2,
+        subsequent_return_7d=-5.5,
+    )
+    storage.record_event_lineage(ev2)
+
+    runner = CliRunner(env={"COLUMNS": "200"})
+    result = runner.invoke(app, ["performance", "--db", db_path])
+
+    assert result.exit_code == 0
+    assert "GLOBAL ALPHA & HIT RATE METRICS" in result.stdout
+    assert "PUBLISHER CREDIBILITY SCORECARD" in result.stdout
+    assert "CATALYST REALIZED RETURN LEDGER" in result.stdout
+    assert "Reuters" in result.stdout
+    assert "Financial Times" in result.stdout
+    assert "$NVDA" in result.stdout
+    assert "$MSFT" in result.stdout
+    assert "TIER_A_ALPHA" in result.stdout or "TIER A" in result.stdout
+
+
+def test_performance_command_update_flag(temp_cli_db):
+    """Verify performance command with --update triggers price updates."""
+    from src.models import EventLineageRecord
+
+    storage, db_path = temp_cli_db
+    now = datetime.now(timezone.utc)
+
+    # Pending event eligible for update
+    ev_pending = EventLineageRecord(
+        event_id="evt_pending_quote",
+        title="AMD expands enterprise accelerator lineup",
+        primary_ticker="$AMD",
+        first_seen=now,
+        last_updated=now,
+        source_count=1,
+        all_sources=["Reuters"],
+        event_quality_score=8.0,
+        opportunity_score=7.5,
+        status="ALERT",
+        directional_stance="BULLISH",
+        initial_price=150.0,
+        subsequent_return_1d=None,
+    )
+    storage.record_event_lineage(ev_pending)
+
+    runner = CliRunner()
+    with patch("src.analysis.performance.PerformanceTrackerEngine.update_forward_returns", return_value={"updated_1d": 1, "updated_7d": 0}):
+        result = runner.invoke(app, ["performance", "--update", "--db", db_path])
+        assert result.exit_code == 0
+        assert "Updated 1 forward return quote" in result.stdout
+
+
