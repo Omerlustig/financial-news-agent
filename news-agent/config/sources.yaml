@@ -44,6 +44,11 @@ sources:
     url: "https://news.google.com/rss/search?q=%22FirstFT%22+site:ft.com&hl=en-US&gl=US&ceid=US:en"
     enabled: true
 
+  - name: "Financial Times International"
+    type: "rss"
+    url: "https://www.ft.com/rss/home/international"
+    enabled: true
+
   - name: "Bloomberg Markets"
     type: "rss"
     url: "https://feeds.bloomberg.com/markets/news.rss"
@@ -57,6 +62,16 @@ sources:
   - name: "Investing.com News"
     type: "rss"
     url: "https://www.investing.com/rss/news.rss"
+    enabled: true
+
+  - name: "Stock Titan Real-Time"
+    type: "rss"
+    url: "https://www.stocktitan.net/rss"
+    enabled: true
+
+  - name: "Associated Press Business"
+    type: "rss"
+    url: "https://news.google.com/rss/search?q=%22Associated+Press%22+business+when:3d&hl=en-US&gl=US&ceid=US:en"
     enabled: true
 
   - name: "Investors Business Daily"
@@ -135,3 +150,25 @@ sources:
     type: "rss"
     url: "https://news.google.com/rss/search?q=site:maya.tase.co.il&hl=he&gl=IL&ceid=IL:he"
     enabled: true
+
+  - name: "Walla Finance"
+    type: "rss"
+    url: "https://rss.walla.co.il/feed/557"
+    enabled: true
+
+  - name: "Calcalist CTech English"
+    type: "rss"
+    url: "https://news.google.com/rss/search?q=site:calcalistech.com+when:7d&hl=en-US&gl=US&ceid=US:en"
+    enabled: true
+
+  # Google Alerts (Custom Real-Time Keyword Alerts)
+  # How to use:
+  # 1. Go to https://www.google.com/alerts
+  # 2. Enter any search query (e.g. "merger OR acquisition OR earnings OR delisted")
+  # 3. Under Options, set "Deliver to: RSS feed"
+  # 4. Copy the generated feed URL and paste below:
+  # - name: "Google Alert - M&A & Earnings"
+  #   type: "rss"
+  #   url: "https://www.google.com/alerts/feeds/YOUR_USER_ID/YOUR_ALERT_ID"
+  #   enabled: true
+
