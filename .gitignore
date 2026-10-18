@@ -3,6 +3,8 @@
 .env.*
 !.env.example
 *.local
+*-adminsdk-*.json
+service-account*.json
 
 # IDEs & OS
 .idea/
