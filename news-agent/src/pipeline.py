@@ -80,6 +80,7 @@ class Pipeline:
         min_confidence_score: Optional[int] = None,
         min_impact_grade: Optional[Union[ImpactGrade, str]] = None,
         alert_on_all: Optional[bool] = None,
+        force: bool = False,
         settings: Optional[Settings] = None,
         watchlist: Optional[WatchlistSettings] = None,
         fetch_timeout: float = 15.0,
@@ -87,6 +88,7 @@ class Pipeline:
         max_article_age_minutes: Optional[int] = None,
     ) -> None:
         self.settings = settings
+        self.force = force
         self.fetch_timeout = fetch_timeout
         self.fetcher = fetcher
 
@@ -230,6 +232,15 @@ class Pipeline:
         - Non-qualifying events (WATCHLIST, INFORMATIONAL, UNVERIFIED, NO_ACTION,
           or failed hard gates) are suppressed, recorded with alerted=False, and audited.
         """
+        # 0. Unconditional force override (explicit --force CLI flag)
+        if self.force:
+            logger.info(
+                "Alert forced unconditionally via --force flag (status=%s, score=%d)",
+                analysis.status,
+                analysis.confidence_score,
+            )
+            return True
+
         # 1. Hard Gate: Workflow Status
         if analysis.status != EventStatus.OPPORTUNITY_CANDIDATE:
             logger.info(
@@ -250,7 +261,7 @@ class Pipeline:
             )
             return False
 
-        # 3. CLI Testing Override
+        # 3. CLI Testing Override (bypasses threshold/materiality for valid OPPORTUNITY_CANDIDATE events)
         if self.alert_on_all:
             return True
 
@@ -329,6 +340,9 @@ class Pipeline:
 
         # 2. Deduplication via SQLite
         unseen_articles = self.storage.filter_unseen(articles)
+        if self.force and not unseen_articles and articles:
+            logger.info("Force mode active and all articles previously seen: selecting the %d freshest articles for forced processing.", min(len(articles), 3))
+            unseen_articles = articles[:3]
         new_unseen_count = len(unseen_articles)
 
         analyzed_count = 0
@@ -357,7 +371,7 @@ class Pipeline:
 
             # If article was not analyzed by LLM (rate limit exhausted or credentials unavailable),
             # do not persist to DB/cache so it will be retried in the next polling cycle.
-            if not getattr(analysis, "is_llm_analyzed", True):
+            if not getattr(analysis, "is_llm_analyzed", True) and not (self.force or self.alert_on_all):
                 logger.warning(
                     "Article '%s' (%s) was not analyzed by LLM (rate-limited / error); skipping storage persistence so it will be retried in the next cycle.",
                     canonical.title,
@@ -607,6 +621,8 @@ class Pipeline:
             summary.alerted,
             summary.errors,
         )
+        if summary.alerted == 0:
+            logger.info("No articles qualified for Telegram alerts in this scan cycle (0 alerts sent).")
         return summary
 
     def close(self) -> None:

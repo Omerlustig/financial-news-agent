@@ -294,6 +294,7 @@ def run_once(
     config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to settings.yaml"),
     sources: Optional[str] = typer.Option(None, "--sources", "-s", help="Path to sources.yaml"),
     alert_on_all: bool = typer.Option(False, "--alert-on-all", help="Bypass impact and confidence thresholds for testing"),
+    force: bool = typer.Option(False, "--force", "-f", help="Force send alert to Telegram even if below threshold or already seen"),
     limit_per_source: Optional[int] = typer.Option(None, "--limit-per-source", "--batch-size", "-b", help="Max articles to fetch per site (overrides settings.yaml)"),
     max_age_minutes: Optional[int] = typer.Option(None, "--max-age-minutes", "-m", help="Filter articles older than N minutes (overrides settings.yaml)"),
 ) -> None:
@@ -305,7 +306,8 @@ def run_once(
     pipeline = Pipeline(
         settings=settings,
         sources=sources_list,
-        alert_on_all=alert_on_all or settings.filter.alert_on_all,
+        alert_on_all=alert_on_all or force or settings.filter.alert_on_all,
+        force=force,
         batch_size_per_source=limit_per_source,
         max_article_age_minutes=max_age_minutes,
     )
@@ -323,6 +325,14 @@ def run_once(
         table.add_row("Errors Encountered", str(summary.errors))
 
         console.print(table)
+
+        if summary.alerted == 0:
+            console.print("[yellow bold]ℹ️ No articles met the alerting criteria to send to Telegram in this cycle (0 alerts sent).[/yellow bold]")
+            logger.info("No qualifying articles found to send to Telegram (alerted=0).")
+        else:
+            console.print(f"[green bold]✓ Successfully dispatched {summary.alerted} alert(s) to Telegram![/green bold]")
+            logger.info("Successfully dispatched %d alert(s) to Telegram.", summary.alerted)
+
         render_actionable_investment_bottom_line(console, summary, pipeline.storage)
 
         # If any sectors have news, display the Sector News summary table
@@ -343,6 +353,7 @@ def scan(
     config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to settings.yaml"),
     sources: Optional[str] = typer.Option(None, "--sources", "-s", help="Path to sources.yaml"),
     alert_on_all: bool = typer.Option(False, "--alert-on-all", help="Bypass impact and confidence thresholds for testing"),
+    force: bool = typer.Option(False, "--force", "-f", help="Force send alert to Telegram even if below threshold or already seen"),
     limit_per_source: Optional[int] = typer.Option(None, "--limit-per-source", "--batch-size", "-b", help="Max articles to fetch per site (overrides settings.yaml)"),
     max_age_minutes: Optional[int] = typer.Option(None, "--max-age-minutes", "-m", help="Filter articles older than N minutes (overrides settings.yaml)"),
 ) -> None:
@@ -351,6 +362,7 @@ def scan(
         config=config,
         sources=sources,
         alert_on_all=alert_on_all,
+        force=force,
         limit_per_source=limit_per_source,
         max_age_minutes=max_age_minutes,
     )
