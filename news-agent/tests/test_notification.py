@@ -473,8 +473,10 @@ def test_telegram_message_formatting_institutional_causal_chain():
     assert "🟢 <b>Beneficiaries:</b> $NVDA, $AVGO" in msg
     assert "🔴 <b>Negatively Exposed:</b> $INTC" in msg
 
-    # Recommendation
+    # Recommendation & Final Conclusion Brief
     assert "💡 <b>Recommendation:</b>" in msg
+    assert "🎯 <b>FINAL CONCLUSION & BOTTOM LINE:</b>" in msg
+    assert "Actionable Positioning:" in msg
 
     # 8. Counterarguments & Invalidation
     assert "⚖️ <b>Counterarguments:</b> Legislative challenge in Congress could delay implementation window by 60 days." in msg

@@ -331,6 +331,31 @@ def format_telegram_message(
             rec = f"Exercise caution or evaluate hedge protection on {', '.join(negatively_exposed)}."
         else:
             rec = "Track subsequent corporate disclosures and primary filings for tradeable volume confirmation."
+
+    # Final Conclusion Brief regarding this push
+    actionable_summary_parts: List[str] = []
+    if beneficiaries and beneficiaries != ["None"]:
+        actionable_summary_parts.append(f"Favor: {', '.join(beneficiaries)}")
+    if negatively_exposed and negatively_exposed != ["None"]:
+        actionable_summary_parts.append(f"Avoid/Hedge: {', '.join(negatively_exposed)}")
+    if not actionable_summary_parts and sectors and sectors != ["None"]:
+        actionable_summary_parts.append(f"Sector: {sectors_str}")
+
+    conclusion_body = rec
+    if not conclusion_body or conclusion_body == "None":
+        if analysis.causal_chain and analysis.causal_chain.economic_mechanism:
+            conclusion_body = analysis.causal_chain.economic_mechanism
+        elif analysis.catalyst_thesis:
+            conclusion_body = analysis.catalyst_thesis
+        else:
+            conclusion_body = summary_text
+
+    lines.append("")
+    lines.append("🎯 <b>FINAL CONCLUSION & BOTTOM LINE:</b>")
+    lines.append(f"📌 {escape_html(conclusion_body)}")
+    if actionable_summary_parts:
+        lines.append(f"👉 <b>Actionable Positioning:</b> {escape_html(' | '.join(actionable_summary_parts))}")
+
     lines.append("")
     lines.append(f"💡 <b>Recommendation:</b> {escape_html(rec)}")
 
