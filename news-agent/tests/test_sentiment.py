@@ -273,3 +273,68 @@ class TestPromptAndAnalyzerIntegration:
         assert fallback.sentiment is not None
         assert fallback.sentiment.score <= -0.6
         assert fallback.sentiment.label == SentimentLabel.VERY_BEARISH
+
+    def test_prompt_combines_sentiment_and_inflection_reversal_guidance(self):
+        article = RawArticle(
+            title="Automaker Announces Strategic Turnaround After Prolonged Slump",
+            url="https://example.com/auto-reversal",
+            source_name="Reuters",
+            summary="Strong Q3 margins signal bottoming of EV price wars.",
+        )
+        system_prompt, user_prompt = build_analyst_prompt(article)
+
+        # Sentiment instructions
+        assert "FINANCIAL SENTIMENT ANALYSIS" in system_prompt
+        assert "Financial Sentiment" in user_prompt
+
+        # Inflection and reversal instructions
+        assert "INFLECTION / REVERSAL VS TREND CONTINUATION" in system_prompt
+        assert "Inflection vs Continuation" in user_prompt
+        assert "SECTORAL SPILLOVERS & ASYMMETRIC IMPACT" in system_prompt
+
+    def test_analyzer_calibrates_sentiment_and_preserves_recommendation_and_watchlist(self):
+        import json
+        from unittest.mock import patch
+        from src.config import WatchlistSettings
+
+        watchlist = WatchlistSettings(
+            enabled=True,
+            tickers=["$TSLA"],
+            sectors=["Automotive"],
+        )
+        analyzer = MarketImpactAnalyzer(watchlist_settings=watchlist)
+        article = RawArticle(
+            title="Tesla shares surge on record vehicle delivery beat and guidance raised",
+            url="https://example.com/tsla-beat",
+            source_name="Bloomberg",
+            summary="Deliveries surpass Wall Street consensus by 15%.",
+        )
+
+        mock_payload = {
+            "is_market_moving": True,
+            "confidence_score": 8,
+            "impact_grade": "HIGH",
+            "affected_tickers": ["$TSLA"],
+            "affected_sectors": ["Automotive"],
+            "summary": "Tesla beats delivery targets.",
+            "catalyst_thesis": "Turnaround in automotive gross margins following sequential price cuts.",
+            "status": "OPPORTUNITY_CANDIDATE",
+            "directional_stance": "BULLISH",
+            "recommendation": "Accumulate $TSLA on confirmed breakout above key resistance.",
+        }
+
+        with patch("litellm.completion") as mock_completion:
+            mock_completion.return_value = {
+                "choices": [{"message": {"content": json.dumps(mock_payload)}}]
+            }
+            result = analyzer.analyze(article)
+
+            # Check calibrated sentiment
+            assert result.sentiment.score >= 0.3
+            assert result.sentiment.label in (SentimentLabel.BULLISH, SentimentLabel.VERY_BULLISH)
+
+            # Check recommendation and watchlist fields
+            assert result.recommendation == "Accumulate $TSLA on confirmed breakout above key resistance."
+            assert result.is_watchlist_match is True
+            assert "$TSLA" in result.matched_watchlist_items
+

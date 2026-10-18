@@ -165,6 +165,13 @@ def format_telegram_message(
     if getattr(analysis, "surge_level", None) == SurgeLevel.SURGE_BREAKING:
         lines.append("<b>⚡ [BREAKING CATALYST SURGE]</b>")
 
+    if getattr(analysis, "is_watchlist_match", False):
+        if getattr(analysis, "matched_watchlist_items", None):
+            items_str = ", ".join(analysis.matched_watchlist_items)
+            lines.append(f"⭐ <b>[WATCHLIST FOCUS: {escape_html(items_str)}]</b>")
+        else:
+            lines.append("⭐ <b>[WATCHLIST FOCUS]</b>")
+
     lines.append(
         f"🚨 <b>[OPPORTUNITY CANDIDATE | Score: {score}/10 | {escape_html(grade_name)}]</b>"
     )
@@ -255,6 +262,10 @@ def format_telegram_message(
         lines.append(
             f"📈 <b>Trend Verdict:</b> {escape_html(verdict_val)} (Velocity: {analysis.trend.sentiment_velocity:+.2f})"
         )
+        if getattr(analysis.trend, "sentiment_acceleration", 0.0) != 0.0:
+            lines.append(
+                f"⚡ <b>Acceleration:</b> {analysis.trend.sentiment_acceleration:+.2f} ({escape_html(verdict_val)})"
+            )
 
     # Executive Summary
 

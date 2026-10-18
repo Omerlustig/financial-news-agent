@@ -134,7 +134,7 @@ def render_actionable_investment_bottom_line(
                 f"🔴 [bold red]STOCKS & SECTORS TO AVOID / SHORT (EXPOSED):[/bold red]\n"
                 f"   {neg_display}\n\n"
                 f"💡 [bold underline]Causal Transmission Thesis:[/bold underline]\n"
-                f"[dim white]{mechanism or analysis.rationale or article.summary}[/dim white]\n"
+                f"[dim white]{mechanism or getattr(analysis, 'catalyst_thesis', None) or getattr(analysis, 'rationale', None) or article.summary}[/dim white]\n"
             )
             if invalidation:
                 card_body += f"\n🛑 [bold]Thesis Invalidation Condition:[/] [dim yellow]{invalidation}[/dim yellow]\n"
@@ -213,6 +213,82 @@ def render_actionable_investment_bottom_line(
         console.print(Panel(msg, title="[yellow]Market Bottom Line[/yellow]", border_style="yellow"))
 
 
+def render_sector_news_summary_table(
+    console: Console,
+    sectors_summary: List[Dict[str, Any]],
+    title: str = "Sector News Sentiment Summary",
+) -> None:
+    """Renders a Rich table of sector news sentiment with color-coded sentiment labels."""
+    if not sectors_summary:
+        return
+
+    table = Table(title=title)
+    table.add_column("Sector", style="cyan bold")
+    table.add_column("News Count", justify="center")
+    table.add_column("Sentiment Score", justify="right")
+    table.add_column("Sentiment Label", justify="left")
+
+    for item in sectors_summary:
+        sector_name = str(item.get("sector", ""))
+        count = str(item.get("total_articles", 0))
+        avg_sentiment = float(item.get("avg_sentiment", 0.0))
+        label = str(item.get("sentiment_label", "NEUTRAL"))
+
+        # Color coding: green for bullish, red for bearish, yellow for neutral
+        if avg_sentiment > 0.05 or "BULLISH" in label.upper():
+            score_str = f"[green]{avg_sentiment:+.2f}[/green]"
+            label_str = f"[bold green]{label}[/bold green]"
+        elif avg_sentiment < -0.05 or "BEARISH" in label.upper():
+            score_str = f"[red]{avg_sentiment:+.2f}[/red]"
+            label_str = f"[bold red]{label}[/bold red]"
+        else:
+            score_str = f"[yellow]{avg_sentiment:+.2f}[/yellow]"
+            label_str = f"[yellow]{label}[/yellow]"
+
+        table.add_row(sector_name, count, score_str, label_str)
+
+    console.print()
+    console.print(table)
+
+
+def render_ticker_news_summary_table(
+    console: Console,
+    tickers_summary: List[Dict[str, Any]],
+    title: str = "Ticker News Sentiment Summary",
+) -> None:
+    """Renders a Rich table of ticker news sentiment with color-coded sentiment labels."""
+    if not tickers_summary:
+        return
+
+    table = Table(title=title)
+    table.add_column("Ticker", style="cyan bold")
+    table.add_column("News Count", justify="center")
+    table.add_column("Sentiment Score", justify="right")
+    table.add_column("Sentiment Label", justify="left")
+
+    for item in tickers_summary:
+        ticker_name = str(item.get("ticker", ""))
+        count = str(item.get("total_articles", 0))
+        avg_sentiment = float(item.get("avg_sentiment", 0.0))
+        label = str(item.get("sentiment_label", "NEUTRAL"))
+
+        # Color coding: green for bullish, red for bearish, yellow for neutral
+        if avg_sentiment > 0.05 or "BULLISH" in label.upper():
+            score_str = f"[green]{avg_sentiment:+.2f}[/green]"
+            label_str = f"[bold green]{label}[/bold green]"
+        elif avg_sentiment < -0.05 or "BEARISH" in label.upper():
+            score_str = f"[red]{avg_sentiment:+.2f}[/red]"
+            label_str = f"[bold red]{label}[/bold red]"
+        else:
+            score_str = f"[yellow]{avg_sentiment:+.2f}[/yellow]"
+            label_str = f"[yellow]{label}[/yellow]"
+
+        table.add_row(ticker_name, count, score_str, label_str)
+
+    console.print()
+    console.print(table)
+
+
 @app.command("run-once")
 def run_once(
     config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to settings.yaml"),
@@ -248,8 +324,36 @@ def run_once(
 
         console.print(table)
         render_actionable_investment_bottom_line(console, summary, pipeline.storage)
+
+        # If any sectors have news, display the Sector News summary table
+        if pipeline.storage is not None:
+            sector_news = pipeline.storage.get_all_sectors_trend_summary(hours=24)
+            if sector_news:
+                render_sector_news_summary_table(
+                    console,
+                    sector_news,
+                    title="Sector News Sentiment Summary (Recent 24h)",
+                )
     finally:
         pipeline.close()
+
+
+@app.command("scan")
+def scan(
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to settings.yaml"),
+    sources: Optional[str] = typer.Option(None, "--sources", "-s", help="Path to sources.yaml"),
+    alert_on_all: bool = typer.Option(False, "--alert-on-all", help="Bypass impact and confidence thresholds for testing"),
+    limit_per_source: Optional[int] = typer.Option(None, "--limit-per-source", "--batch-size", "-b", help="Max articles to fetch per site (overrides settings.yaml)"),
+    max_age_minutes: Optional[int] = typer.Option(None, "--max-age-minutes", "-m", help="Filter articles older than N minutes (overrides settings.yaml)"),
+) -> None:
+    """Execute scan cycle, actionable bottom line, and sector news summary (alias for run-once)."""
+    run_once(
+        config=config,
+        sources=sources,
+        alert_on_all=alert_on_all,
+        limit_per_source=limit_per_source,
+        max_age_minutes=max_age_minutes,
+    )
 
 
 @app.command("run")
@@ -706,6 +810,46 @@ def scanner(
         console.print()
         console.print(table)
         console.print()
+    finally:
+        storage.close()
+
+
+@app.command("heatmap")
+def heatmap(
+    hours: int = typer.Option(24, "--hours", "-h", help="Time window in hours for heatmap aggregation"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to settings.yaml"),
+    db: Optional[str] = typer.Option(None, "--db", help="Override SQLite database path"),
+) -> None:
+    """Display visual news sentiment heatmap across market sectors and tickers."""
+    settings = load_settings(config)
+    db_path = db or settings.agent.database_path
+
+    storage = SQLiteStorage(db_path)
+    try:
+        sectors_summary = storage.get_all_sectors_trend_summary(hours=hours)
+        tickers_summary = storage.get_all_tickers_trend_summary(hours=hours)
+
+        if not sectors_summary and not tickers_summary:
+            console.print(f"[yellow]No sector or ticker sentiment records found in the past {hours} hours.[/yellow]")
+            return
+
+        if sectors_summary:
+            render_sector_news_summary_table(
+                console,
+                sectors_summary,
+                title=f"Sector News Sentiment ({hours}h Window)",
+            )
+        else:
+            console.print(f"[dim]No sector sentiment records in the past {hours} hours.[/dim]")
+
+        if tickers_summary:
+            render_ticker_news_summary_table(
+                console,
+                tickers_summary,
+                title=f"Ticker News Sentiment ({hours}h Window)",
+            )
+        else:
+            console.print(f"[dim]No ticker sentiment records in the past {hours} hours.[/dim]")
     finally:
         storage.close()
 

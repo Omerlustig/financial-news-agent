@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from src.models import RawArticle, MarketImpactAnalysis, ImpactGrade, EventStatus
-from src.config import Settings, SourceConfig, load_settings, load_sources
+from src.config import Settings, SourceConfig, WatchlistSettings, load_settings, load_sources
 from src.ingestion.rss import fetch_all_sources
 from src.storage.base import BaseStorage
 from src.storage.sqlite import SQLiteStorage
@@ -81,6 +81,7 @@ class Pipeline:
         min_impact_grade: Optional[Union[ImpactGrade, str]] = None,
         alert_on_all: Optional[bool] = None,
         settings: Optional[Settings] = None,
+        watchlist: Optional[WatchlistSettings] = None,
         fetch_timeout: float = 15.0,
         batch_size_per_source: Optional[int] = None,
         max_article_age_minutes: Optional[int] = None,
@@ -88,7 +89,20 @@ class Pipeline:
         self.settings = settings
         self.fetch_timeout = fetch_timeout
         self.fetcher = fetcher
-        self.corroborator = corroborator if corroborator is not None else EventCorroborator()
+
+        # Watchlist resolution
+        if watchlist is not None:
+            self.watchlist = watchlist
+        elif settings is not None and getattr(settings, "watchlist", None) is not None:
+            self.watchlist = settings.watchlist
+        else:
+            self.watchlist = None
+
+        self.corroborator = (
+            corroborator
+            if corroborator is not None
+            else EventCorroborator(watchlist_settings=self.watchlist)
+        )
         self.surge_engine = surge_engine if surge_engine is not None else SurgeVelocityEngine()
         self.trend_engine = trend_engine if trend_engine is not None else TrendEngine()
 
@@ -157,9 +171,16 @@ class Pipeline:
         if analyzer is not None:
             self.analyzer = analyzer
         elif settings is not None:
-            self.analyzer = MarketImpactAnalyzer(settings.llm, fallback_on_error=True)
+            self.analyzer = MarketImpactAnalyzer(
+                settings.llm,
+                fallback_on_error=True,
+                watchlist_settings=self.watchlist,
+            )
         else:
-            self.analyzer = MarketImpactAnalyzer(fallback_on_error=True)
+            self.analyzer = MarketImpactAnalyzer(
+                fallback_on_error=True,
+                watchlist_settings=self.watchlist,
+            )
 
         # Notification subsystem
         if notifier is not None:
@@ -371,6 +392,61 @@ class Pipeline:
                         exc,
                         exc_info=True,
                     )
+
+            # Noise filtering: detect and suppress zero-value syndicated noise releases
+            if self.corroborator.is_noise_article(canonical):
+                logger.info(
+                    "Article '%s' identified as syndicated noise release; suppressing alert.",
+                    canonical.title,
+                )
+                analysis.status = EventStatus.NO_ACTION
+                analysis.is_market_moving = False
+
+            # Watchlist matching & priority scoring boost
+            if self.watchlist is not None and getattr(self.watchlist, "enabled", True):
+                matched_items: List[str] = []
+                watched_tickers = {
+                    (t.strip().upper() if t.strip().upper().startswith("$") else f"${t.strip().upper()}")
+                    for t in getattr(self.watchlist, "tickers", [])
+                    if t and t.strip()
+                }
+                watched_sectors = {
+                    s.strip().lower()
+                    for s in getattr(self.watchlist, "sectors", [])
+                    if s and s.strip()
+                }
+
+                # Candidate tickers
+                candidate_tickers = list(analysis.affected_tickers or [])
+                if analysis.causal_chain:
+                    candidate_tickers.extend(analysis.causal_chain.beneficiaries or [])
+                    candidate_tickers.extend(analysis.causal_chain.negatively_exposed or [])
+
+                for ticker in candidate_tickers:
+                    clean_t = str(ticker).strip().upper()
+                    norm_t = clean_t if clean_t.startswith("$") else f"${clean_t}"
+                    if norm_t in watched_tickers and norm_t not in matched_items:
+                        matched_items.append(norm_t)
+
+                # Candidate sectors
+                candidate_sectors = list(analysis.affected_sectors or [])
+                if analysis.causal_chain:
+                    candidate_sectors.extend(analysis.causal_chain.affected_sectors or [])
+
+                for sector in candidate_sectors:
+                    clean_s = str(sector).strip()
+                    if clean_s.lower() in watched_sectors and clean_s not in matched_items:
+                        matched_items.append(clean_s)
+
+                if matched_items:
+                    analysis.is_watchlist_match = True
+                    analysis.matched_watchlist_items = matched_items
+                    boost = getattr(self.watchlist, "score_boost", 1)
+                    new_score = min(10, analysis.confidence_score + boost)
+                    analysis.confidence_score = new_score
+                    if new_score >= 7 and analysis.impact_grade in (ImpactGrade.LOW, ImpactGrade.AVERAGE):
+                        analysis.impact_grade = ImpactGrade.HIGH
+                        analysis.is_market_moving = True
 
             # Filtering & alert criteria (enforcing Hard Gate Decision Engine)
             alert_warranted = self.should_alert(analysis)

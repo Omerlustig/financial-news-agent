@@ -4,7 +4,7 @@ import pytest
 from src.models import RawArticle, MarketImpactAnalysis, ImpactGrade, EventStatus, HardGates
 from src.pipeline import Pipeline, CycleSummary
 from src.analysis.analyzer import AnalysisError
-from src.config import Settings, FilterSettings
+from src.config import Settings, FilterSettings, WatchlistSettings
 from src.notification.console import ConsoleNotifier
 
 
@@ -1084,6 +1084,165 @@ sources:
         kwargs = mock_fetch.call_args.kwargs
         assert kwargs["max_items_per_source"] == 3
         assert kwargs["max_article_age_minutes"] == 10
+
+
+def test_pipeline_watchlist_ticker_match_boosts_score_and_elevates_grade():
+    """Verify that an article matching watchlist tickers receives priority scoring boost and grade elevation."""
+    mock_storage = MagicMock()
+    mock_analyzer = MagicMock()
+    mock_notifier = MagicMock()
+    mock_notifier.send_alert.return_value = True
+
+    art = RawArticle(
+        title="Nvidia Unveils Next-Gen AI Architecture",
+        url="https://test.com/nvda-ai",
+        source_name="TechWire",
+    )
+    mock_storage.filter_unseen.return_value = [art]
+
+    # Analysis initially with score 6 (AVERAGE grade, not market moving)
+    analysis = MarketImpactAnalysis(
+        is_market_moving=False,
+        confidence_score=6,
+        impact_grade=ImpactGrade.AVERAGE,
+        affected_tickers=["$NVDA"],
+        affected_sectors=["Semiconductors"],
+        summary="Nvidia announcements.",
+        catalyst_thesis="New products.",
+        status=EventStatus.OPPORTUNITY_CANDIDATE,
+        hard_gates=HardGates(is_novel=True, is_verified=True, has_direct_exposure=True),
+    )
+    mock_analyzer.analyze.return_value = analysis
+
+    watchlist = WatchlistSettings(
+        enabled=True,
+        tickers=["$NVDA", "$AAPL"],
+        sectors=[],
+        score_boost=1,
+    )
+
+    pipeline = Pipeline(
+        storage=mock_storage,
+        analyzer=mock_analyzer,
+        notifier=mock_notifier,
+        watchlist=watchlist,
+        min_score=7,
+        min_impact_grade=ImpactGrade.HIGH,
+    )
+
+    summary = pipeline.process_articles([art])
+
+    # Watchlist match checks
+    assert analysis.is_watchlist_match is True
+    assert "$NVDA" in analysis.matched_watchlist_items
+    assert analysis.confidence_score == 7
+    assert analysis.impact_grade == ImpactGrade.HIGH
+    assert analysis.is_market_moving is True
+
+    # Alert should have fired because score was elevated from 6 to 7 (HIGH)
+    assert summary.alerted == 1
+    mock_notifier.send_alert.assert_called_once()
+
+
+def test_pipeline_watchlist_sector_match():
+    """Verify that an article matching watchlist sectors receives score boost."""
+    mock_storage = MagicMock()
+    mock_analyzer = MagicMock()
+    mock_notifier = MagicMock()
+    mock_notifier.send_alert.return_value = True
+
+    art = RawArticle(
+        title="Aviation Sector Facing Fuel Headwinds",
+        url="https://test.com/aviation-fuel",
+        source_name="AeroDaily",
+    )
+    mock_storage.filter_unseen.return_value = [art]
+
+    analysis = MarketImpactAnalysis(
+        is_market_moving=False,
+        confidence_score=5,
+        impact_grade=ImpactGrade.AVERAGE,
+        affected_tickers=["$DAL"],
+        affected_sectors=["Aviation"],
+        summary="Jet fuel spikes impact airline margins.",
+        catalyst_thesis="Fuel expenditure cuts operating margin.",
+        status=EventStatus.OPPORTUNITY_CANDIDATE,
+        hard_gates=HardGates(is_novel=True, is_verified=True, has_direct_exposure=True),
+    )
+    mock_analyzer.analyze.return_value = analysis
+
+    watchlist = WatchlistSettings(
+        enabled=True,
+        tickers=[],
+        sectors=["Aviation", "Defense"],
+        score_boost=2,
+    )
+
+    pipeline = Pipeline(
+        storage=mock_storage,
+        analyzer=mock_analyzer,
+        notifier=mock_notifier,
+        watchlist=watchlist,
+        min_score=7,
+    )
+
+    summary = pipeline.process_articles([art])
+
+    assert analysis.is_watchlist_match is True
+    assert "Aviation" in analysis.matched_watchlist_items
+    assert analysis.confidence_score == 7
+    assert analysis.impact_grade == ImpactGrade.HIGH
+    assert analysis.is_market_moving is True
+    assert summary.alerted == 1
+
+
+def test_pipeline_watchlist_disabled_no_boost():
+    """Verify that when watchlist is disabled, no matching or score boost is applied."""
+    mock_storage = MagicMock()
+    mock_analyzer = MagicMock()
+    mock_notifier = MagicMock()
+
+    art = RawArticle(
+        title="Nvidia Routine Announcement",
+        url="https://test.com/nvda-routine",
+        source_name="TechDaily",
+    )
+    mock_storage.filter_unseen.return_value = [art]
+
+    analysis = MarketImpactAnalysis(
+        is_market_moving=False,
+        confidence_score=6,
+        impact_grade=ImpactGrade.AVERAGE,
+        affected_tickers=["$NVDA"],
+        affected_sectors=["Semiconductors"],
+        summary="Routine.",
+        catalyst_thesis="None.",
+        status=EventStatus.OPPORTUNITY_CANDIDATE,
+        hard_gates=HardGates(is_novel=True, is_verified=True, has_direct_exposure=True),
+    )
+    mock_analyzer.analyze.return_value = analysis
+
+    watchlist = WatchlistSettings(
+        enabled=False,
+        tickers=["$NVDA"],
+        score_boost=2,
+    )
+
+    pipeline = Pipeline(
+        storage=mock_storage,
+        analyzer=mock_analyzer,
+        notifier=mock_notifier,
+        watchlist=watchlist,
+        min_score=7,
+    )
+
+    summary = pipeline.process_articles([art])
+
+    assert analysis.is_watchlist_match is False
+    assert analysis.confidence_score == 6
+    assert analysis.impact_grade == ImpactGrade.AVERAGE
+    assert summary.alerted == 0
+
 
 
 

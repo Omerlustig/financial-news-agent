@@ -865,3 +865,219 @@ def test_analyzer_immediate_failover_on_429_rate_limit():
         assert models_called == ["gemini/gemini-1.5-flash", "gpt-4o-mini"]
 
 
+def test_prompt_construction_inflection_reversal_and_sector_spillovers():
+    article = RawArticle(
+        title="Fed Unexpectedly Cuts Rates Amid Liquidity Crunch",
+        url="https://wsj.com/fed-cut",
+        source_name="Wall Street Journal",
+        summary="Emergency easing cycle initiated.",
+    )
+    system_prompt, user_prompt = build_analyst_prompt(article)
+
+    # System prompt verification
+    assert "INFLECTION / REVERSAL VS TREND CONTINUATION" in system_prompt
+    assert "SECTORAL SPILLOVERS & ASYMMETRIC IMPACT" in system_prompt
+    assert "WATCHLIST & TRANSMISSION CHANNEL DEPTH" in system_prompt
+    assert "airline fuel surcharge" in system_prompt.lower()
+    assert "export controls" in system_prompt.lower()
+    assert '"recommendation"' in system_prompt
+
+    # User prompt verification
+    assert "Inflection vs Continuation" in user_prompt
+    assert "Sectoral Spillovers" in user_prompt
+    assert "freight vs passenger" in user_prompt.lower()
+    assert "equipment makers vs foundries" in user_prompt.lower()
+
+
+def test_prompt_construction_with_watchlist_context():
+    article = RawArticle(
+        title="Semiconductor Export Curbs Tightened",
+        url="https://reuters.com/chips",
+        source_name="Reuters",
+        summary="New curbs on wafer fab equipment.",
+    )
+    system_prompt, user_prompt = build_analyst_prompt(
+        article,
+        watchlist_tickers=["$NVDA", "$TSM"],
+        watchlist_sectors=["Semiconductors", "Defense"],
+    )
+
+    assert "WATCHLIST CONTEXT (PRIORITY SURVEILLANCE)" in user_prompt
+    assert "$NVDA" in user_prompt
+    assert "$TSM" in user_prompt
+    assert "Semiconductors" in user_prompt
+    assert "Defense" in user_prompt
+
+
+def test_analyzer_parses_updated_institutional_schema_fields():
+    import json
+    analyzer = MarketImpactAnalyzer()
+    article = RawArticle(
+        title="Commerce Department Issues Semiconductor Equipment Export Directives",
+        url="https://reuters.com/chips-export",
+        source_name="Reuters",
+        summary="Strict licensing enforced on advanced lithography tools.",
+    )
+
+    full_payload = {
+        "is_market_moving": True,
+        "confidence_score": 9,
+        "impact_grade": "CRITICAL",
+        "affected_tickers": ["$ASML", "$NVDA", "$TSM"],
+        "affected_sectors": ["Semiconductors", "Equipment"],
+        "summary": "Commerce department tightens equipment exports.",
+        "catalyst_thesis": "Severely curbs China-bound lithography shipments, impinging wafer fab tooling revenues.",
+        "status": "OPPORTUNITY_CANDIDATE",
+        "directional_stance": "BEARISH",
+        "time_horizon": "MEDIUM_TERM",
+        "causal_chain": {
+            "event_facts": "U.S. enforces export restrictions on lithography tooling.",
+            "economic_mechanism": "Direct lost tool deliveries compress gross margins of equipment makers while foundries seek domestic alternatives.",
+            "affected_sectors": ["Semiconductors"],
+            "beneficiaries": ["$TSM"],
+            "negatively_exposed": ["$ASML"],
+            "counterarguments": "Hyperscaler demand in Western regions may offset Asian revenue loss.",
+            "invalidation_conditions": "Commerce Dept issues broad general export exemptions.",
+        },
+        "hard_gates": {
+            "is_novel": True,
+            "is_verified": True,
+            "has_direct_exposure": True,
+            "passes_all_gates": True,
+        },
+        "recommendation": "Underweight lithography equipment ($ASML) on regulatory headwinds; monitor domestic foundries for substitution upside.",
+        "is_watchlist_match": True,
+        "matched_watchlist_items": ["$ASML", "Semiconductors"],
+    }
+
+    with patch("litellm.completion") as mock_completion:
+        mock_completion.return_value = {
+            "choices": [{"message": {"content": json.dumps(full_payload)}}]
+        }
+        result = analyzer.analyze(article)
+
+        assert isinstance(result, MarketImpactAnalysis)
+        assert result.is_market_moving is True
+        assert result.confidence_score == 9
+        assert result.impact_grade == ImpactGrade.CRITICAL
+        assert result.recommendation == "Underweight lithography equipment ($ASML) on regulatory headwinds; monitor domestic foundries for substitution upside."
+        assert result.is_watchlist_match is True
+        assert "$ASML" in result.matched_watchlist_items
+        assert "Semiconductors" in result.matched_watchlist_items
+        assert result.causal_chain is not None
+        assert "$TSM" in result.causal_chain.beneficiaries
+        assert "$ASML" in result.causal_chain.negatively_exposed
+        assert "Hyperscaler demand" in result.causal_chain.counterarguments
+        assert "export exemptions" in result.causal_chain.invalidation_conditions
+
+
+def test_analyzer_auto_matches_watchlist_when_configured():
+    import json
+    from src.config import WatchlistSettings
+    watchlist = WatchlistSettings(
+        enabled=True,
+        tickers=["$NVDA", "$AAPL"],
+        sectors=["Semiconductors", "Consumer Electronics"],
+    )
+    analyzer = MarketImpactAnalyzer(watchlist_settings=watchlist)
+    article = RawArticle(
+        title="Major chip announcement",
+        url="https://example.com/nvda",
+        source_name="TechWire",
+        summary="NVIDIA reveals next-gen architecture.",
+    )
+
+    llm_payload = {
+        "is_market_moving": True,
+        "confidence_score": 8,
+        "impact_grade": "HIGH",
+        "affected_tickers": ["$NVDA"],
+        "affected_sectors": ["Semiconductors"],
+        "summary": "Next-gen architecture announced.",
+        "catalyst_thesis": "Accelerates data center compute revenue.",
+        "status": "OPPORTUNITY_CANDIDATE",
+        "directional_stance": "BULLISH",
+    }
+
+    with patch("litellm.completion") as mock_completion:
+        mock_completion.return_value = {
+            "choices": [{"message": {"content": json.dumps(llm_payload)}}]
+        }
+        result = analyzer.analyze(article)
+        assert result.is_watchlist_match is True
+        assert "$NVDA" in result.matched_watchlist_items
+        assert "Semiconductors" in result.matched_watchlist_items
+
+
+def test_analyzer_fallback_complete_model_defaults_zero_validation_errors():
+    from src.models import SurgeLevel
+    analyzer = MarketImpactAnalyzer()
+    article = RawArticle(
+        title="Unknown Market Whispers and Speculation",
+        url="https://example.com/whispers",
+        source_name="BlogSpot",
+        summary="Unsubstantiated rumours circulate.",
+    )
+
+    fallback = analyzer._build_fallback(article, reason="Timeout after 3 retries")
+    assert isinstance(fallback, MarketImpactAnalysis)
+    assert fallback.is_market_moving is False
+    assert fallback.confidence_score == 1
+    assert fallback.impact_grade == ImpactGrade.LOW
+    assert fallback.status == EventStatus.NO_ACTION
+    assert fallback.directional_stance == DirectionalStance.NEUTRAL
+    assert fallback.causal_chain is not None
+    assert fallback.causal_chain.event_facts == article.title
+    assert fallback.hard_gates is not None
+    assert fallback.hard_gates.passes_all_gates is False
+    assert fallback.recommendation is not None
+    assert len(fallback.recommendation) > 0
+    assert fallback.surge_level == SurgeLevel.NORMAL
+    assert fallback.is_watchlist_match is False
+    assert fallback.matched_watchlist_items == []
+    assert fallback.sector_trends == []
+    assert fallback.sentiment is not None
+
+    # Zero validation errors on full re-validation and dump
+    dumped = fallback.model_dump()
+    revalidated = MarketImpactAnalysis.model_validate(dumped)
+    assert revalidated.confidence_score == 1
+    assert revalidated.is_watchlist_match is False
+
+
+def test_analyzer_causal_chain_resilience_missing_optional_inner_fields():
+    analyzer = MarketImpactAnalyzer()
+    article = RawArticle(
+        title="Airline Imposes Fuel Surcharges Amid Jet Fuel Surge",
+        url="https://example.com/airlines",
+        source_name="Aviation Daily",
+        summary="Carriers introduce fuel surcharges.",
+    )
+
+    payload_with_sparse_causal_chain = {
+        "is_market_moving": True,
+        "confidence_score": 7,
+        "impact_grade": "HIGH",
+        "affected_tickers": ["$DAL", "$UAL"],
+        "affected_sectors": ["Airlines"],
+        "summary": "Fuel surcharges introduced by airlines.",
+        "catalyst_thesis": "Cost pass-through attempts may depress passenger volumes while preserving cargo margins.",
+        "status": "OPPORTUNITY_CANDIDATE",
+        "causal_chain": {
+            "beneficiaries": ["$FDX"],
+            "negatively_exposed": ["$DAL"],
+        },
+    }
+
+    parsed = analyzer._parse_and_validate(payload_with_sparse_causal_chain, article)
+    assert parsed.causal_chain is not None
+    assert parsed.causal_chain.event_facts is not None
+    assert len(parsed.causal_chain.event_facts) > 0
+    assert parsed.causal_chain.economic_mechanism is not None
+    assert "$FDX" in parsed.causal_chain.beneficiaries
+    assert "$DAL" in parsed.causal_chain.negatively_exposed
+    assert parsed.recommendation is not None
+    assert len(parsed.recommendation) > 0
+
+
+

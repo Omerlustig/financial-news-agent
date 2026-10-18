@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any, List, Optional
 import yaml
 from pydantic import BaseModel, Field, field_validator
-from src.models import ImpactGrade
+from src.models import ImpactGrade, WatchlistSettings
 
 try:
     from dotenv import load_dotenv
@@ -85,12 +85,15 @@ class TelegramSettings(BaseModel):
 
 
 
+
+
 class Settings(BaseModel):
     """Root application settings schema."""
     agent: AgentSettings = Field(default_factory=AgentSettings)
     filter: FilterSettings = Field(default_factory=FilterSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
     telegram: TelegramSettings = Field(default_factory=TelegramSettings)
+    watchlist: WatchlistSettings = Field(default_factory=WatchlistSettings)
 
 
 def _expand_env_vars(data: Any) -> Any:

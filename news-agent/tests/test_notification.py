@@ -787,5 +787,58 @@ def test_telegram_notifier_fallback_to_console():
         mock_msg.assert_called_once()
 
 
+def test_format_telegram_message_watchlist_badge():
+    """Verify watchlist focus badge is displayed in header when is_watchlist_match is True."""
+    article = RawArticle(
+        title="Delta Air Lines Cuts Flights Due to Fuel",
+        url="https://wsj.com/delta-fuel",
+        source_name="Wall Street Journal",
+        published_at=datetime(2026, 10, 18, 8, 0, tzinfo=timezone.utc),
+    )
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=8,
+        impact_grade=ImpactGrade.HIGH,
+        affected_tickers=["$DAL"],
+        affected_sectors=["Aviation"],
+        summary="Delta cuts flights schedule due to fuel costs.",
+        catalyst_thesis="Fuel spike cuts into quarterly operating margins.",
+        is_watchlist_match=True,
+        matched_watchlist_items=["$DAL", "Aviation"],
+    )
+    msg = format_telegram_message(article, analysis)
+
+    assert "⭐ <b>[WATCHLIST FOCUS: $DAL, Aviation]</b>" in msg
+
+
+def test_format_telegram_message_with_sentiment_acceleration():
+    """Verify sentiment acceleration indicator is displayed when trend acceleration is non-zero."""
+    article = RawArticle(
+        title="Reversal Catalyst in Energy",
+        url="https://reuters.com/oil-reversal",
+        source_name="Reuters",
+    )
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=8,
+        impact_grade=ImpactGrade.HIGH,
+        affected_tickers=["$XOM"],
+        affected_sectors=["Energy"],
+        summary="Crude inventory drops precipitously.",
+        catalyst_thesis="Rapid inventory drain.",
+        trend=TrendMetrics(
+            buzz_ratio=2.1,
+            sentiment_velocity=0.35,
+            sentiment_acceleration=0.45,
+            trend_verdict=TrendVerdict.BULLISH_REVERSAL,
+            articles_24h_count=5,
+        ),
+    )
+    msg = format_telegram_message(article, analysis)
+
+    assert "⚡ <b>Acceleration:</b> +0.45 (BULLISH_REVERSAL)" in msg
+
+
+
 
 

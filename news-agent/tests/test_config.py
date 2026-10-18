@@ -11,8 +11,20 @@ from src.models import (
     CausalChain,
     HardGates,
     TokenUsage,
+    SentimentLabel,
+    TrendVerdict,
+    TrendMetrics,
+    SectorTrendMetrics,
 )
-from src.config import load_settings, load_sources, Settings, SourceConfig, AgentSettings, LLMSettings
+from src.config import (
+    load_settings,
+    load_sources,
+    Settings,
+    SourceConfig,
+    AgentSettings,
+    LLMSettings,
+    WatchlistSettings,
+)
 
 
 def test_raw_article_hash():
@@ -413,3 +425,115 @@ def test_market_impact_analysis_institutional_full():
     assert analysis.hard_gates is not None
     assert analysis.hard_gates.passes_all_gates is True
     assert "News-derived hypothesis" in analysis.disclaimer
+
+
+def test_watchlist_settings_model_and_normalization():
+    # Defaults
+    w = WatchlistSettings()
+    assert w.enabled is True
+    assert w.tickers == []
+    assert w.sectors == []
+    assert w.score_boost == 1
+
+    # Normalization from string and non-$ prefixed tickers
+    w2 = WatchlistSettings(
+        enabled=True,
+        tickers="nvda, $tsla, aapl",
+        sectors="Semiconductors, Defense & Aerospace",
+        score_boost=2,
+    )
+    assert w2.tickers == ["$NVDA", "$TSLA", "$AAPL"]
+    assert w2.sectors == ["Semiconductors", "Defense & Aerospace"]
+    assert w2.score_boost == 2
+
+    # Normalization from list of unformatted strings
+    w3 = WatchlistSettings(
+        tickers=["msft", "$GOOG", "  meta  "],
+        sectors=["  Cloud Computing  ", "Cybersecurity"],
+    )
+    assert w3.tickers == ["$MSFT", "$GOOG", "$META"]
+    assert w3.sectors == ["Cloud Computing", "Cybersecurity"]
+
+
+def test_load_actual_settings_yaml_watchlist():
+    settings = load_settings()
+    assert settings.watchlist is not None
+    assert settings.watchlist.enabled is True
+    assert "$NVDA" in settings.watchlist.tickers
+    assert "$TSLA" in settings.watchlist.tickers
+    assert "$AAPL" in settings.watchlist.tickers
+    assert "Semiconductors" in settings.watchlist.sectors
+    assert settings.watchlist.score_boost >= 1
+
+
+def test_trend_verdict_reversal_and_breakdown():
+    assert TrendVerdict.BULLISH_REVERSAL.value == "BULLISH_REVERSAL"
+    assert TrendVerdict.BEARISH_BREAKDOWN.value == "BEARISH_BREAKDOWN"
+    assert TrendVerdict("bullish_reversal") == TrendVerdict.BULLISH_REVERSAL
+    assert TrendVerdict("BEARISH BREAKDOWN") == TrendVerdict.BEARISH_BREAKDOWN
+
+
+def test_sector_trend_metrics_model():
+    # Default values
+    stm = SectorTrendMetrics(sector="Semiconductors")
+    assert stm.sector == "Semiconductors"
+    assert stm.avg_sentiment == 0.0
+    assert stm.sentiment_velocity == 0.0
+    assert stm.sentiment_acceleration == 0.0
+    assert stm.buzz_ratio == 1.0
+    assert stm.article_count == 1
+    assert stm.sentiment_label == SentimentLabel.NEUTRAL
+    assert stm.trend_verdict == TrendVerdict.NEUTRAL_CONSOLIDATION
+
+    # Custom values with string enum normalization
+    stm2 = SectorTrendMetrics(
+        sector="Defense",
+        avg_sentiment=0.75,
+        sentiment_velocity=0.3,
+        sentiment_acceleration=0.1,
+        buzz_ratio=2.5,
+        article_count=5,
+        sentiment_label="very_bullish",
+        trend_verdict="bullish_reversal",
+    )
+    assert stm2.sentiment_label == SentimentLabel.VERY_BULLISH
+    assert stm2.trend_verdict == TrendVerdict.BULLISH_REVERSAL
+
+
+def test_market_impact_analysis_watchlist_and_sector_trends():
+    sector_metric = SectorTrendMetrics(
+        sector="Semiconductors",
+        avg_sentiment=0.6,
+        sentiment_velocity=0.2,
+        trend_verdict=TrendVerdict.STRONG_BULLISH,
+    )
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=9,
+        impact_grade=ImpactGrade.CRITICAL,
+        affected_tickers=["$NVDA"],
+        affected_sectors=["Semiconductors"],
+        summary="Major breakthrough in enterprise accelerators.",
+        catalyst_thesis="Accelerating data center AI CAPEX.",
+        is_watchlist_match=True,
+        matched_watchlist_items=["$NVDA", "Semiconductors"],
+        sector_trends=[sector_metric],
+    )
+    assert analysis.is_watchlist_match is True
+    assert analysis.matched_watchlist_items == ["$NVDA", "Semiconductors"]
+    assert len(analysis.sector_trends) == 1
+    assert analysis.sector_trends[0].sector == "Semiconductors"
+    assert analysis.sector_trends[0].trend_verdict == TrendVerdict.STRONG_BULLISH
+
+
+def test_watchlist_settings_import_from_models_and_config():
+    from src.models import WatchlistSettings as ModelsWatchlistSettings
+    from src.config import WatchlistSettings as ConfigWatchlistSettings
+
+    assert ModelsWatchlistSettings is ConfigWatchlistSettings
+    wl = ModelsWatchlistSettings(tickers=["AAPL", "$msft"], sectors=["Technology"], score_boost=2)
+    assert wl.enabled is True
+    assert wl.tickers == ["$AAPL", "$MSFT"]
+    assert wl.sectors == ["Technology"]
+    assert wl.score_boost == 2
+

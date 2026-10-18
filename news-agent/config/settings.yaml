@@ -24,3 +24,9 @@ telegram:
   bot_token: "${TELEGRAM_BOT_TOKEN}"
   chat_id: "${TELEGRAM_CHAT_ID}"
 
+watchlist:
+  enabled: true
+  tickers: ["$NVDA", "$TSLA", "$AAPL"]
+  sectors: ["Semiconductors", "Defense & Aerospace", "Commercial Airlines"]
+  score_boost: 1
+

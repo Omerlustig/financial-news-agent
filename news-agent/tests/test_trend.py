@@ -10,6 +10,8 @@ from src.analysis.trend import TrendEngine
 from src.models import (
     ImpactGrade,
     MarketImpactAnalysis,
+    SectorTrendMetrics,
+    SentimentLabel,
     SentimentScore,
     TrendMetrics,
     TrendVerdict,
@@ -235,11 +237,11 @@ def test_trend_verdict_moderate_bearish(trend_engine: TrendEngine):
     recent_24h = [
         {"sentiment_score": -0.3, "created_at": (now - timedelta(hours=2)).isoformat(), "id": 1},
     ]
-    # Normal volume (7 articles over 7 days)
+    # Normal volume (7 articles over 7 days) with steady bearish sentiment
     recent_7d = [
         {"sentiment_score": -0.3, "created_at": (now - timedelta(hours=2)).isoformat(), "id": 1},
     ] + [
-        {"sentiment_score": 0.0, "created_at": (now - timedelta(days=i)).isoformat(), "id": 10 + i}
+        {"sentiment_score": -0.3, "created_at": (now - timedelta(days=i)).isoformat(), "id": 10 + i}
         for i in range(1, 7)
     ]
 
@@ -448,4 +450,279 @@ def test_pipeline_process_articles_enriches_trend():
     mock_storage.record_article.assert_called()
     call_args = mock_storage.record_article.call_args[0]
     assert call_args[1].trend == trend_result
+
+
+def test_sentiment_acceleration_inflection_reversal(trend_engine: TrendEngine):
+    """Test sentiment acceleration on inflection from negative to positive velocity.
+
+    Window 2 (48h-72h): sentiment 0.5
+    Window 1 (24h-48h): sentiment 0.2 -> V_prior = 0.2 - 0.5 = -0.3
+    Window 0 (0-24h): sentiment 0.4 -> V_current = 0.4 - 0.2 = +0.2
+    Acceleration = 0.2 - (-0.3) = +0.5
+    Verdict: BULLISH_REVERSAL (A >= 0.25 and avg_sentiment > 0)
+    """
+    now = datetime.now(timezone.utc)
+    recent_24h = [
+        {"sentiment_score": 0.4, "created_at": (now - timedelta(hours=2)).isoformat(), "id": 1},
+    ]
+    recent_7d = [
+        {"sentiment_score": 0.4, "created_at": (now - timedelta(hours=2)).isoformat(), "id": 1},
+        {"sentiment_score": 0.2, "created_at": (now - timedelta(hours=30)).isoformat(), "id": 2},
+        {"sentiment_score": 0.5, "created_at": (now - timedelta(hours=54)).isoformat(), "id": 3},
+    ]
+
+    mock_storage = MagicMock()
+    mock_storage.get_ticker_sentiment_window.side_effect = lambda ticker, hours: (
+        recent_24h if hours == 24 else recent_7d
+    )
+
+    metrics = trend_engine.calculate_ticker_trend(mock_storage, "$NVDA")
+    assert metrics.sentiment_velocity == pytest.approx(0.2, abs=0.001)
+    assert metrics.sentiment_acceleration == pytest.approx(0.5, abs=0.001)
+    assert metrics.trend_verdict == TrendVerdict.BULLISH_REVERSAL
+
+
+def test_sentiment_acceleration_bearish_breakdown(trend_engine: TrendEngine):
+    """Test sentiment acceleration on breakdown from positive to negative velocity.
+
+    Window 2 (48h-72h): sentiment -0.1
+    Window 1 (24h-48h): sentiment 0.2 -> V_prior = 0.2 - (-0.1) = +0.3
+    Window 0 (0-24h): sentiment -0.2 -> V_current = -0.2 - 0.2 = -0.4
+    Acceleration = -0.4 - 0.3 = -0.7
+    Verdict: BEARISH_BREAKDOWN (A <= -0.25 and avg_sentiment < 0)
+    """
+    now = datetime.now(timezone.utc)
+    recent_24h = [
+        {"sentiment_score": -0.2, "created_at": (now - timedelta(hours=2)).isoformat(), "id": 1},
+    ]
+    recent_7d = [
+        {"sentiment_score": -0.2, "created_at": (now - timedelta(hours=2)).isoformat(), "id": 1},
+        {"sentiment_score": 0.2, "created_at": (now - timedelta(hours=30)).isoformat(), "id": 2},
+        {"sentiment_score": -0.1, "created_at": (now - timedelta(hours=54)).isoformat(), "id": 3},
+    ]
+
+    mock_storage = MagicMock()
+    mock_storage.get_ticker_sentiment_window.side_effect = lambda ticker, hours: (
+        recent_24h if hours == 24 else recent_7d
+    )
+
+    metrics = trend_engine.calculate_ticker_trend(mock_storage, "$INTC")
+    assert metrics.sentiment_velocity == pytest.approx(-0.4, abs=0.001)
+    assert metrics.sentiment_acceleration == pytest.approx(-0.7, abs=0.001)
+    assert metrics.trend_verdict == TrendVerdict.BEARISH_BREAKDOWN
+
+
+def test_divergence_bearish_panic_liquidation(trend_engine: TrendEngine):
+    """Test volume buzz spike with negative sentiment and negative velocity triggers BEARISH_PANIC_LIQUIDATION."""
+    now = datetime.now(timezone.utc)
+    # 6 articles in last 24h, all negative
+    recent_24h = [
+        {"sentiment_score": -0.5, "created_at": (now - timedelta(hours=i)).isoformat(), "id": i}
+        for i in range(6)
+    ]
+    # Prior window has higher sentiment (-0.2) so velocity is negative (-0.3)
+    prior = [
+        {"sentiment_score": -0.2, "created_at": (now - timedelta(hours=30)).isoformat(), "id": 10},
+    ]
+    recent_7d = recent_24h + prior
+
+    mock_storage = MagicMock()
+    mock_storage.get_ticker_sentiment_window.side_effect = lambda ticker, hours: (
+        recent_24h if hours == 24 else recent_7d
+    )
+
+    metrics = trend_engine.calculate_ticker_trend(mock_storage, "$CRWD")
+    assert metrics.buzz_ratio >= 1.8
+    assert metrics.sentiment_velocity <= -0.1
+    assert metrics.is_divergent is True
+    assert metrics.divergence_type == "BEARISH_PANIC_LIQUIDATION"
+
+
+def test_divergence_bullish_accumulation(trend_engine: TrendEngine):
+    """Test low buzz with strong positive sentiment and positive velocity triggers BULLISH_ACCUMULATION_DIVERGENCE."""
+    now = datetime.now(timezone.utc)
+    recent_24h = [
+        {"sentiment_score": 0.45, "created_at": (now - timedelta(hours=2)).isoformat(), "id": 1},
+    ]
+    # 7 articles over 7 days -> buzz_ratio == 1.0 (<= 1.3)
+    prior = [
+        {"sentiment_score": 0.2, "created_at": (now - timedelta(hours=30)).isoformat(), "id": 2},
+    ] + [
+        {"sentiment_score": 0.2, "created_at": (now - timedelta(days=i)).isoformat(), "id": 10 + i}
+        for i in range(2, 7)
+    ]
+    recent_7d = recent_24h + prior
+
+    mock_storage = MagicMock()
+    mock_storage.get_ticker_sentiment_window.side_effect = lambda ticker, hours: (
+        recent_24h if hours == 24 else recent_7d
+    )
+
+    metrics = trend_engine.calculate_ticker_trend(mock_storage, "$SMH")
+    assert metrics.buzz_ratio <= 1.3
+    assert metrics.sentiment_velocity >= 0.15
+    assert metrics.is_divergent is True
+    assert metrics.divergence_type == "BULLISH_ACCUMULATION_DIVERGENCE"
+
+
+def test_divergence_normal_non_divergent(trend_engine: TrendEngine):
+    """Verify normal conditions result in is_divergent=False and divergence_type=None."""
+    now = datetime.now(timezone.utc)
+    recent_24h = [
+        {"sentiment_score": 0.1, "created_at": (now - timedelta(hours=2)).isoformat(), "id": 1},
+    ]
+    recent_7d = list(recent_24h)
+
+    mock_storage = MagicMock()
+    mock_storage.get_ticker_sentiment_window.side_effect = lambda ticker, hours: (
+        recent_24h if hours == 24 else recent_7d
+    )
+
+    metrics = trend_engine.calculate_ticker_trend(mock_storage, "$SPY")
+    assert metrics.is_divergent is False
+    assert metrics.divergence_type is None
+
+
+def test_calculate_sector_trend_mock(trend_engine: TrendEngine):
+    """Verify calculate_sector_trend with mock storage across 3 historical windows."""
+    now = datetime.now(timezone.utc)
+    recent_24h = [
+        {"sector": "Semiconductors", "sentiment_score": 0.6, "created_at": (now - timedelta(hours=2)).isoformat(), "id": 1},
+    ]
+    recent_7d = [
+        {"sector": "Semiconductors", "sentiment_score": 0.6, "created_at": (now - timedelta(hours=2)).isoformat(), "id": 1},
+        {"sector": "Semiconductors", "sentiment_score": 0.2, "created_at": (now - timedelta(hours=30)).isoformat(), "id": 2},
+        {"sector": "Semiconductors", "sentiment_score": 0.5, "created_at": (now - timedelta(hours=54)).isoformat(), "id": 3},
+    ]
+
+    mock_storage = MagicMock()
+    mock_storage.get_sector_sentiment_window.side_effect = lambda sector, hours: (
+        recent_24h if hours == 24 else recent_7d
+    )
+
+    sector_metrics = trend_engine.calculate_sector_trend(mock_storage, "Semiconductors")
+    assert isinstance(sector_metrics, SectorTrendMetrics)
+    assert sector_metrics.sector == "Semiconductors"
+    assert sector_metrics.avg_sentiment == pytest.approx(0.6, abs=0.001)
+    assert sector_metrics.sentiment_velocity == pytest.approx(0.4, abs=0.001)
+    # V_prior = 0.2 - 0.5 = -0.3, V_current = 0.4 => A = 0.4 - (-0.3) = 0.7
+    assert sector_metrics.sentiment_acceleration == pytest.approx(0.7, abs=0.001)
+    assert sector_metrics.sentiment_label == SentimentLabel.VERY_BULLISH
+    assert sector_metrics.trend_verdict == TrendVerdict.STRONG_BULLISH
+    mock_storage.get_sector_sentiment_window.assert_any_call("Semiconductors", hours=24)
+    mock_storage.get_sector_sentiment_window.assert_any_call("Semiconductors", hours=168)
+
+
+def test_calculate_sector_trend_edge_cases(trend_engine: TrendEngine):
+    """Verify calculate_sector_trend handles empty input or None storage gracefully."""
+    empty_res = trend_engine.calculate_sector_trend(None, "")  # type: ignore[arg-type]
+    assert empty_res.sector == ""
+    assert empty_res.avg_sentiment == 0.0
+    assert empty_res.trend_verdict == TrendVerdict.NEUTRAL_CONSOLIDATION
+
+    mock_storage = MagicMock()
+    mock_storage.get_sector_sentiment_window.return_value = []
+    res_empty_db = trend_engine.calculate_sector_trend(mock_storage, "Energy")
+    assert res_empty_db.sector == "Energy"
+    assert res_empty_db.buzz_ratio == 1.0
+    assert res_empty_db.sentiment_velocity == 0.0
+
+
+def test_calculate_sector_trend_sqlite_integration(tmp_path, trend_engine: TrendEngine):
+    """Integration test validating calculate_sector_trend against real SQLiteStorage."""
+    db_file = str(tmp_path / "sector_trend_integration.db")
+    storage = SQLiteStorage(db_file)
+    now = datetime.now(timezone.utc)
+
+    import sqlite3
+    conn = sqlite3.connect(db_file)
+    # Prior 2 window: 54h ago
+    time_p2 = now - timedelta(hours=54)
+    # Prior 1 window: 30h ago
+    time_p1 = now - timedelta(hours=30)
+    # Recent window: 2h ago
+    time_rec = now - timedelta(hours=2)
+
+    conn.execute(
+        """
+        INSERT INTO sector_sentiment_history (sector, sentiment_score, sentiment_label, article_hash, published_at, created_at)
+        VALUES ('Semiconductors', 0.5, 'BULLISH', 'h_p2', ?, ?)
+        """,
+        (time_p2.isoformat(), time_p2.isoformat()),
+    )
+    conn.execute(
+        """
+        INSERT INTO sector_sentiment_history (sector, sentiment_score, sentiment_label, article_hash, published_at, created_at)
+        VALUES ('Semiconductors', 0.2, 'BULLISH', 'h_p1', ?, ?)
+        """,
+        (time_p1.isoformat(), time_p1.isoformat()),
+    )
+    conn.execute(
+        """
+        INSERT INTO sector_sentiment_history (sector, sentiment_score, sentiment_label, article_hash, published_at, created_at)
+        VALUES ('Semiconductors', 0.4, 'BULLISH', 'h_rec', ?, ?)
+        """,
+        (time_rec.isoformat(), time_rec.isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+    metrics = trend_engine.calculate_sector_trend(storage, "Semiconductors")
+    assert metrics.sector == "Semiconductors"
+    assert metrics.article_count == 1
+    assert metrics.avg_sentiment == pytest.approx(0.4, abs=0.001)
+    assert metrics.sentiment_velocity == pytest.approx(0.2, abs=0.001)
+    assert metrics.sentiment_acceleration == pytest.approx(0.5, abs=0.001)
+    assert metrics.sentiment_label == SentimentLabel.BULLISH
+    assert metrics.trend_verdict == TrendVerdict.BULLISH_REVERSAL
+
+    storage.close()
+
+
+def test_enrich_analysis_with_sector_trends(trend_engine: TrendEngine):
+    """Verify enrich_analysis_with_sector_trends enriches multiple sectors."""
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=8,
+        impact_grade=ImpactGrade.HIGH,
+        affected_tickers=["$NVDA"],
+        affected_sectors=["Semiconductors", "Cloud Computing"],
+        summary="AI acceleration announcement.",
+        catalyst_thesis="Semiconductor boom expands datacenter cloud spending.",
+        sentiment=SentimentScore(score=0.6, label="VERY_BULLISH"),
+    )
+
+    mock_storage = MagicMock()
+    mock_storage.get_sector_sentiment_window.return_value = []
+
+    enriched = trend_engine.enrich_analysis_with_sector_trends(mock_storage, analysis)
+    assert len(enriched.sector_trends) == 2
+    assert enriched.sector_trends[0].sector == "Semiconductors"
+    assert enriched.sector_trends[1].sector == "Cloud Computing"
+    assert enriched.sector_trends[0].avg_sentiment == pytest.approx(0.6, abs=0.001)
+
+
+def test_enrich_analysis_with_trend_enriches_both_ticker_and_sectors(trend_engine: TrendEngine):
+    """Verify enrich_analysis_with_trend populates both ticker trend and sector_trends."""
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=8,
+        impact_grade=ImpactGrade.HIGH,
+        affected_tickers=["$NVDA"],
+        affected_sectors=["Semiconductors"],
+        summary="NVIDIA announces next-generation chip.",
+        catalyst_thesis="Substantial revenue upside.",
+        sentiment=SentimentScore(score=0.7, label="VERY_BULLISH"),
+    )
+
+    mock_storage = MagicMock()
+    mock_storage.get_ticker_sentiment_window.return_value = []
+    mock_storage.get_sector_sentiment_window.return_value = []
+
+    enriched = trend_engine.enrich_analysis_with_trend(mock_storage, analysis)
+    assert enriched.trend is not None
+    assert isinstance(enriched.trend, TrendMetrics)
+    assert len(enriched.sector_trends) == 1
+    assert isinstance(enriched.sector_trends[0], SectorTrendMetrics)
+    assert enriched.sector_trends[0].sector == "Semiconductors"
 

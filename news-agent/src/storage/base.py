@@ -88,6 +88,28 @@ class BaseStorage(ABC):
         """Return aggregate sentiment trend summaries across all tickers in the past `hours`."""
         raise NotImplementedError
 
+    @abstractmethod
+    def record_sector_sentiment(
+        self,
+        sector: str,
+        sentiment_score: float,
+        sentiment_label: str,
+        article_hash: str,
+        published_at: Optional[datetime] = None,
+    ) -> None:
+        """Record a sentiment history data point for a specific sector."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_sector_sentiment_window(self, sector: str, hours: int = 24) -> List[Dict[str, Any]]:
+        """Retrieve sentiment history records for a sector within the past `hours`."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_all_sectors_trend_summary(self, hours: int = 24) -> List[Dict[str, Any]]:
+        """Return aggregate sentiment trend summaries across all sectors in the past `hours`."""
+        raise NotImplementedError
+
 
     def close(self) -> None:
         """Release storage connections or system resources."""

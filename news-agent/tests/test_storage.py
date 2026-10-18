@@ -21,6 +21,7 @@ from src.models import (
     SentimentScore,
     TrendVerdict,
     TrendMetrics,
+    SectorTrendMetrics,
 )
 
 
@@ -351,6 +352,24 @@ def test_storage_fail_fast_on_closed(tmp_path):
 
     with pytest.raises(RuntimeError, match="Database connection is closed"):
         storage.get_metrics_summary()
+
+    with pytest.raises(RuntimeError, match="Database connection is closed"):
+        storage.record_ticker_sentiment("$NVDA", 0.5, "BULLISH", "hash-1")
+
+    with pytest.raises(RuntimeError, match="Database connection is closed"):
+        storage.get_ticker_sentiment_window("$NVDA")
+
+    with pytest.raises(RuntimeError, match="Database connection is closed"):
+        storage.get_all_tickers_trend_summary()
+
+    with pytest.raises(RuntimeError, match="Database connection is closed"):
+        storage.record_sector_sentiment("Semiconductors", 0.5, "BULLISH", "hash-1")
+
+    with pytest.raises(RuntimeError, match="Database connection is closed"):
+        storage.get_sector_sentiment_window("Semiconductors")
+
+    with pytest.raises(RuntimeError, match="Database connection is closed"):
+        storage.get_all_sectors_trend_summary()
 
 
 def test_transaction_rollback_on_failure(tmp_path):
@@ -1001,6 +1020,190 @@ def test_sentiment_and_trend_model_contracts():
     assert analysis_dict.trend is not None
     assert analysis_dict.trend.buzz_ratio == pytest.approx(2.1)
     assert analysis_dict.trend.trend_verdict == TrendVerdict.PANIC_CAPITULATION
+
+
+def test_record_article_persists_sector_sentiment(tmp_path):
+    storage = SQLiteStorage(str(tmp_path / "sector_article.db"))
+    article = RawArticle(
+        title="Next-gen GaN semiconductor foundries announced",
+        url="https://example.com/gan-foundries",
+        source_name="TechWire",
+    )
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=8,
+        impact_grade=ImpactGrade.HIGH,
+        affected_tickers=["$NVDA", "$TSM"],
+        affected_sectors=["Semiconductors", "Commercial Aviation"],
+        summary="High-efficiency semiconductor production capacity expanding.",
+        catalyst_thesis="Accelerates aerospace power electronics transition.",
+        sentiment=SentimentScore(score=0.8, label=SentimentLabel.VERY_BULLISH),
+    )
+    storage.record_article(article, analysis, alerted=True)
+
+    # Verify sector sentiment entries for each affected sector
+    semi_window = storage.get_sector_sentiment_window("Semiconductors", hours=24)
+    assert len(semi_window) == 1
+    assert semi_window[0]["sector"] == "Semiconductors"
+    assert semi_window[0]["sentiment_score"] == pytest.approx(0.8)
+    assert semi_window[0]["sentiment_label"] == "VERY_BULLISH"
+    assert semi_window[0]["article_hash"] == article.content_hash
+
+    # Case-insensitive query test
+    aviation_window = storage.get_sector_sentiment_window("commercial aviation", hours=24)
+    assert len(aviation_window) == 1
+    assert aviation_window[0]["sector"] == "Commercial Aviation"
+    assert aviation_window[0]["sentiment_score"] == pytest.approx(0.8)
+    assert aviation_window[0]["sentiment_label"] == "VERY_BULLISH"
+
+    storage.close()
+
+
+def test_record_sector_sentiment_and_window_query(tmp_path):
+    storage = SQLiteStorage(str(tmp_path / "sector_sentiment.db"))
+    now = datetime.datetime.now(datetime.timezone.utc)
+    old_time = now - datetime.timedelta(hours=36)
+    recent_time = now - datetime.timedelta(hours=2)
+
+    # 1. Record old data point for Defense (>24h ago)
+    storage.record_sector_sentiment(
+        sector="Defense",
+        sentiment_score=-0.6,
+        sentiment_label=SentimentLabel.VERY_BEARISH,
+        article_hash="old_defense_hash",
+        published_at=old_time,
+    )
+
+    # 2. Record recent data point for Defense (within 24h)
+    storage.record_sector_sentiment(
+        sector="Defense",
+        sentiment_score=0.7,
+        sentiment_label=SentimentLabel.VERY_BULLISH,
+        article_hash="recent_defense_hash",
+        published_at=recent_time,
+    )
+
+    # Query 24h window: should only return the recent one
+    window_24h = storage.get_sector_sentiment_window("Defense", hours=24)
+    assert len(window_24h) == 1
+    assert window_24h[0]["article_hash"] == "recent_defense_hash"
+    assert window_24h[0]["sentiment_score"] == pytest.approx(0.7)
+
+    # Query 48h window: should return both
+    window_48h = storage.get_sector_sentiment_window("Defense", hours=48)
+    assert len(window_48h) == 2
+
+    # Query empty/unknown sector
+    unknown = storage.get_sector_sentiment_window("NonexistentSector", hours=24)
+    assert unknown == []
+
+    # Query with empty string
+    empty = storage.get_sector_sentiment_window("", hours=24)
+    assert empty == []
+
+    storage.close()
+
+
+def test_get_all_sectors_trend_summary(tmp_path):
+    storage = SQLiteStorage(str(tmp_path / "sector_summary.db"))
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    # Insert multiple data points across sectors
+    storage.record_sector_sentiment("Semiconductors", 0.8, "VERY_BULLISH", "h1", published_at=now)
+    storage.record_sector_sentiment("Semiconductors", 0.6, "BULLISH", "h2", published_at=now)
+    storage.record_sector_sentiment("Automotive", -0.4, "BEARISH", "h3", published_at=now)
+    storage.record_sector_sentiment("Energy", 0.05, "NEUTRAL", "h4", published_at=now)
+
+    summary = storage.get_all_sectors_trend_summary(hours=24)
+    assert len(summary) == 3
+
+    # Check Semiconductors: avg=(0.8+0.6)/2 = 0.7 -> VERY_BULLISH
+    semi = next(s for s in summary if s["sector"] == "Semiconductors")
+    assert semi["total_articles"] == 2
+    assert semi["avg_sentiment"] == pytest.approx(0.7)
+    assert semi["sentiment_label"] == "VERY_BULLISH"
+
+    # Check Automotive: avg=-0.4 -> BEARISH
+    auto = next(s for s in summary if s["sector"] == "Automotive")
+    assert auto["total_articles"] == 1
+    assert auto["avg_sentiment"] == pytest.approx(-0.4)
+    assert auto["sentiment_label"] == "BEARISH"
+
+    # Check Energy: avg=0.05 -> NEUTRAL
+    energy = next(s for s in summary if s["sector"] == "Energy")
+    assert energy["total_articles"] == 1
+    assert energy["avg_sentiment"] == pytest.approx(0.05)
+    assert energy["sentiment_label"] == "NEUTRAL"
+
+    storage.close()
+
+
+def test_storage_schema_migration_includes_sector_sentiment_history(tmp_path):
+    db_file = tmp_path / "legacy_migration_sector.db"
+
+    # 1. Create a legacy table without sector_sentiment_history
+    conn = sqlite3.connect(str(db_file))
+    conn.execute(
+        """
+        CREATE TABLE articles (
+            content_hash TEXT PRIMARY KEY,
+            url TEXT NOT NULL,
+            title TEXT NOT NULL,
+            source_name TEXT NOT NULL,
+            published_at TEXT,
+            created_at TEXT NOT NULL,
+            is_market_moving INTEGER,
+            confidence_score INTEGER,
+            impact_grade TEXT,
+            tickers TEXT,
+            sectors TEXT,
+            alerted INTEGER NOT NULL DEFAULT 0
+        );
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    # 2. Instantiate SQLiteStorage on this legacy DB
+    storage = SQLiteStorage(str(db_file))
+
+    # Verify sector_sentiment_history is auto-created and operations work seamlessly
+    storage.record_sector_sentiment(
+        sector="Biotechnology",
+        sentiment_score=0.9,
+        sentiment_label="VERY_BULLISH",
+        article_hash="bio_hash_1",
+    )
+    records = storage.get_sector_sentiment_window("Biotechnology", hours=24)
+    assert len(records) == 1
+    assert records[0]["sentiment_score"] == pytest.approx(0.9)
+    storage.close()
+
+
+def test_trend_metrics_acceleration_and_divergence_contracts():
+    # Defaults
+    t = TrendMetrics()
+    assert t.buzz_ratio == 1.0
+    assert t.sentiment_velocity == 0.0
+    assert t.sentiment_acceleration == 0.0
+    assert t.is_divergent is False
+    assert t.divergence_type is None
+    assert t.trend_verdict == TrendVerdict.NEUTRAL_CONSOLIDATION
+
+    # Custom divergence values
+    t_div = TrendMetrics(
+        buzz_ratio=3.5,
+        sentiment_velocity=-0.45,
+        sentiment_acceleration=-0.2,
+        is_divergent=True,
+        divergence_type="BEARISH_PANIC_LIQUIDATION",
+        trend_verdict=TrendVerdict.PANIC_CAPITULATION,
+    )
+    assert t_div.is_divergent is True
+    assert t_div.divergence_type == "BEARISH_PANIC_LIQUIDATION"
+    assert t_div.sentiment_acceleration == pytest.approx(-0.2)
+    assert t_div.trend_verdict == TrendVerdict.PANIC_CAPITULATION
+
 
 
 

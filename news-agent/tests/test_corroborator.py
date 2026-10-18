@@ -271,3 +271,56 @@ def test_pipeline_multi_source_deduplication_and_single_alert():
     assert second_summary.new_unseen == 0
     assert second_summary.analyzed == 0
     assert second_summary.alerted == 0
+
+
+def test_cross_newsroom_headline_clustering_delta():
+    """Verify that distinct newsroom headlines about the same event cluster cleanly."""
+    corroborator = EventCorroborator()
+    now = datetime.now(timezone.utc)
+
+    art1 = RawArticle(
+        title="Delta cuts flight schedule due to fuel costs",
+        url="https://wsj.com/delta-cuts-schedule",
+        source_name="Wall Street Journal",
+        published_at=now,
+    )
+    art2 = RawArticle(
+        title="Delta trims capacity amid jet fuel spike",
+        url="https://bloomberg.com/delta-trims-capacity",
+        source_name="Bloomberg",
+        published_at=now,
+    )
+
+    similarity = corroborator.compute_similarity(art1, art2)
+    assert similarity >= corroborator.similarity_threshold
+    assert corroborator.are_same_event(art1, art2) is True
+
+    clusters = corroborator.cluster_articles([art1, art2])
+    assert len(clusters) == 1
+    assert clusters[0].is_multi_source is True
+    assert clusters[0].sources == {"Wall Street Journal", "Bloomberg"}
+
+
+def test_noise_article_detection():
+    """Verify detection of zero-value syndicated noise releases like law firm solicitations and routine webcasts."""
+    corroborator = EventCorroborator()
+    noise1 = RawArticle(
+        title="SHAREHOLDER ALERT: Pomerantz Law Firm Investigates Claims on Behalf of Investors",
+        url="https://globenewswire.com/noise-1",
+        source_name="GlobeNewswire",
+    )
+    noise2 = RawArticle(
+        title="Company XYZ Scheduled to Present at Upcoming Investor Conference",
+        url="https://prnewswire.com/noise-2",
+        source_name="PR Newswire",
+    )
+    clean = RawArticle(
+        title="Federal Reserve Cuts Interest Rates by 50 Basis Points in Emergency Move",
+        url="https://reuters.com/fed-cuts",
+        source_name="Reuters",
+    )
+
+    assert corroborator.is_noise_article(noise1) is True
+    assert corroborator.is_noise_article(noise2) is True
+    assert corroborator.is_noise_article(clean) is False
+

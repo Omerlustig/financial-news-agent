@@ -25,8 +25,9 @@ from src.models import (
     CausalChain,
     HardGates,
     TokenUsage,
+    SurgeLevel,
 )
-from src.config import LLMSettings
+from src.config import LLMSettings, WatchlistSettings
 from src.storage.base import BaseStorage
 from src.analysis.prompts import build_analyst_prompt, filter_valid_tickers
 from src.analysis.taxonomy import SECTaxonomyClassifier
@@ -80,9 +81,11 @@ class MarketImpactAnalyzer:
         fallback_model: Optional[str] = None,
         storage: Optional[BaseStorage] = None,
         llm_settings: Optional[LLMSettings] = None,
+        watchlist_settings: Optional[WatchlistSettings] = None,
     ):
         self.storage = storage
         self.llm_settings = llm_settings
+        self.watchlist_settings = watchlist_settings
 
         if llm_settings is not None:
             self.model = llm_settings.model
@@ -108,15 +111,34 @@ class MarketImpactAnalyzer:
         self.quota_exhausted = False
 
 
-    def analyze(self, article: RawArticle) -> MarketImpactAnalysis:
+    def analyze(
+        self,
+        article: RawArticle,
+        watchlist_tickers: Optional[List[str]] = None,
+        watchlist_sectors: Optional[List[str]] = None,
+    ) -> MarketImpactAnalysis:
         """Analyzes an article using litellm with failover to fallback_model and exponential backoff retries."""
+        effective_wl_tickers = watchlist_tickers
+        if effective_wl_tickers is None and self.watchlist_settings and self.watchlist_settings.enabled:
+            effective_wl_tickers = self.watchlist_settings.tickers
+
+        effective_wl_sectors = watchlist_sectors
+        if effective_wl_sectors is None and self.watchlist_settings and self.watchlist_settings.enabled:
+            effective_wl_sectors = self.watchlist_settings.sectors
+
         if self.quota_exhausted:
             return self._build_fallback(
                 article,
                 "API request quota previously exhausted; evaluated with deterministic financial sentiment & regulatory engine.",
+                watchlist_tickers=effective_wl_tickers,
+                watchlist_sectors=effective_wl_sectors,
             )
 
-        system_prompt, user_prompt = build_analyst_prompt(article)
+        system_prompt, user_prompt = build_analyst_prompt(
+            article,
+            watchlist_tickers=effective_wl_tickers,
+            watchlist_sectors=effective_wl_sectors,
+        )
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -152,7 +174,12 @@ class MarketImpactAnalyzer:
 
                     response = litellm.completion(**completion_kwargs)
                     raw_content = self._extract_content(response)
-                    analysis = self._parse_and_validate(raw_content, article)
+                    analysis = self._parse_and_validate(
+                        raw_content,
+                        article,
+                        watchlist_tickers=effective_wl_tickers,
+                        watchlist_sectors=effective_wl_sectors,
+                    )
 
                     # Calibrate sentiment using domain financial sentiment engine
                     analysis.sentiment = self.sentiment_engine.calibrate_sentiment(
@@ -231,7 +258,12 @@ class MarketImpactAnalyzer:
                             "Daily API quota reached for model '%s'. Seamlessly using high-precision financial rules engine for catalyst scoring.",
                             target_model,
                         )
-                        return self._build_fallback(article, f"Daily quota reached for {target_model}")
+                        return self._build_fallback(
+                            article,
+                            f"Daily quota reached for {target_model}",
+                            watchlist_tickers=effective_wl_tickers,
+                            watchlist_sectors=effective_wl_sectors,
+                        )
 
                     # Immediate failover upon 429 rate limit, 503 high demand spike, or missing/invalid API key
                     if has_fallback_remaining and (is_rate_limit or is_high_demand):
@@ -258,7 +290,12 @@ class MarketImpactAnalyzer:
                                 "Model '%s' credentials unavailable. Using deterministic financial engine for catalyst analysis.",
                                 target_model,
                             )
-                            return self._build_fallback(article, f"Credentials unavailable for {target_model}")
+                            return self._build_fallback(
+                                article,
+                                f"Credentials unavailable for {target_model}",
+                                watchlist_tickers=effective_wl_tickers,
+                                watchlist_sectors=effective_wl_sectors,
+                            )
 
                     logger.warning(
                         "LLM analysis attempt %d/%d on model '%s' failed (%s): %s",
@@ -286,7 +323,12 @@ class MarketImpactAnalyzer:
         error_msg = f"LLM analysis failed after {self.max_retries} retries (unparseable JSON or API error): {last_error}"
         logger.error(error_msg)
         if self.fallback_on_error:
-            return self._build_fallback(article, error_msg)
+            return self._build_fallback(
+                article,
+                error_msg,
+                watchlist_tickers=effective_wl_tickers,
+                watchlist_sectors=effective_wl_sectors,
+            )
         raise AnalysisError(error_msg) from last_error
 
     def _extract_content(self, response: Any) -> str:
@@ -310,8 +352,10 @@ class MarketImpactAnalyzer:
         self,
         content: Union[str, Dict[str, Any]],
         article: Optional[RawArticle] = None,
+        watchlist_tickers: Optional[List[str]] = None,
+        watchlist_sectors: Optional[List[str]] = None,
     ) -> MarketImpactAnalysis:
-        """Cleans, parses, validates JSON, and sanitizes tradeable tickers and hard gates."""
+        """Cleans, parses, validates JSON, and sanitizes tradeable tickers, watchlist alignments, and hard gates."""
         if isinstance(content, dict):
             data = dict(content)
         else:
@@ -325,6 +369,14 @@ class MarketImpactAnalyzer:
         # Sanitize tickers in causal_chain if present
         if isinstance(data.get("causal_chain"), dict):
             chain = data["causal_chain"]
+            if not chain.get("event_facts"):
+                chain["event_facts"] = data.get("summary") or (article.title if article else "Event facts omitted.")
+            if not chain.get("economic_mechanism"):
+                chain["economic_mechanism"] = data.get("catalyst_thesis", "Economic mechanism omitted.")
+            if "counterarguments" not in chain or chain["counterarguments"] is None:
+                chain["counterarguments"] = ""
+            if "invalidation_conditions" not in chain or chain["invalidation_conditions"] is None:
+                chain["invalidation_conditions"] = ""
             if "beneficiaries" in chain:
                 chain["beneficiaries"] = filter_valid_tickers(chain["beneficiaries"])
             if "negatively_exposed" in chain:
@@ -357,6 +409,52 @@ class MarketImpactAnalyzer:
                 else:
                     data["status"] = EventStatus.WATCHLIST.value
 
+        # Watchlist matching & alignment
+        is_wl_match = bool(data.get("is_watchlist_match", False))
+        wl_items = list(data.get("matched_watchlist_items") or [])
+
+        watched_t = list(watchlist_tickers or [])
+        watched_s = list(watchlist_sectors or [])
+        if not watched_t and self.watchlist_settings and self.watchlist_settings.enabled:
+            watched_t = list(self.watchlist_settings.tickers or [])
+        if not watched_s and self.watchlist_settings and self.watchlist_settings.enabled:
+            watched_s = list(self.watchlist_settings.sectors or [])
+
+        if watched_t or watched_s:
+            matched_tickers = [t for t in data.get("affected_tickers", []) if t in watched_t]
+            matched_sectors = []
+            for s in data.get("affected_sectors", []):
+                for ws in watched_s:
+                    if ws.lower() in s.lower() or s.lower() in ws.lower():
+                        if ws not in matched_sectors:
+                            matched_sectors.append(ws)
+            auto_matches = matched_tickers + matched_sectors
+            if auto_matches:
+                is_wl_match = True
+                for m in auto_matches:
+                    if m not in wl_items:
+                        wl_items.append(m)
+
+        data["is_watchlist_match"] = is_wl_match
+        data["matched_watchlist_items"] = wl_items
+
+        # Actionable analyst recommendation handling
+        if "recommendation" in data and data["recommendation"]:
+            data["recommendation"] = str(data["recommendation"]).strip()
+        elif not data.get("recommendation"):
+            tickers = data.get("affected_tickers", [])
+            stance = str(data.get("directional_stance", "NEUTRAL")).upper()
+            if tickers:
+                tickers_str = "/".join(tickers[:2])
+                if "BULLISH" in stance:
+                    data["recommendation"] = f"Prioritize long posture on {tickers_str} on verified pullbacks."
+                elif "BEARISH" in stance:
+                    data["recommendation"] = f"Exercise caution or reduce long exposure on {tickers_str}."
+                else:
+                    data["recommendation"] = f"Monitor {tickers_str} for directional confirmation."
+            else:
+                data["recommendation"] = "Maintain observational stance across affected sectors."
+
         # Infer sec_filing_item if missing from LLM response
         if article and not data.get("sec_filing_item"):
             sec_item, _, _ = SECTaxonomyClassifier.classify_sec_item(article.title, article.summary or "")
@@ -370,9 +468,22 @@ class MarketImpactAnalyzer:
         return MarketImpactAnalysis.model_validate(data)
 
 
-    def _build_fallback(self, article: RawArticle, reason: str) -> MarketImpactAnalysis:
+    def _build_fallback(
+        self,
+        article: RawArticle,
+        reason: str,
+        watchlist_tickers: Optional[List[str]] = None,
+        watchlist_sectors: Optional[List[str]] = None,
+    ) -> MarketImpactAnalysis:
         """Produces a conservative, structured non-market-moving fallback analysis with compliant CausalChain and HardGates."""
         title_snippet = article.title[:200] if article.title else "Unknown headline"
+        sec_item, _, _ = SECTaxonomyClassifier.classify_sec_item(article.title, article.summary or "")
+        filing_item = sec_item.value if sec_item else None
+        if not filing_item:
+            maya_cat, _, _ = SECTaxonomyClassifier.classify_maya_report(article.title, article.summary or "")
+            if maya_cat:
+                filing_item = f"MAYA: {maya_cat}"
+
         return MarketImpactAnalysis(
             is_market_moving=False,
             confidence_score=1,
@@ -402,6 +513,16 @@ class MarketImpactAnalyzer:
             sentiment=self.sentiment_engine.calibrate_sentiment(
                 text=f"{article.title} {article.summary or ''}".strip()
             ),
+            recommendation="Maintain observational stance. No action warranted on unverified or fallback analysis.",
+            corroborating_sources=[article.source_name] if article.source_name else [],
+            corroboration_count=1,
+            sec_filing_item=filing_item,
+            surge_level=SurgeLevel.NORMAL,
+            interactive_buttons=[],
+            trend=None,
+            is_watchlist_match=False,
+            matched_watchlist_items=[],
+            sector_trends=[],
             disclaimer="⚠️ News-derived hypothesis. Market pricing, valuation, and entry points were not checked.",
         )
 

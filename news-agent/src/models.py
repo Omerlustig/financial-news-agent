@@ -162,8 +162,10 @@ class TrendVerdict(str, Enum):
     """Multi-horizon momentum and market sentiment trend verdict."""
     STRONG_BULLISH = "STRONG_BULLISH"
     MODERATE_BULLISH = "MODERATE_BULLISH"
+    BULLISH_REVERSAL = "BULLISH_REVERSAL"
     NEUTRAL_CONSOLIDATION = "NEUTRAL_CONSOLIDATION"
     MODERATE_BEARISH = "MODERATE_BEARISH"
+    BEARISH_BREAKDOWN = "BEARISH_BREAKDOWN"
     PANIC_CAPITULATION = "PANIC_CAPITULATION"
 
     def __str__(self) -> str:
@@ -334,6 +336,9 @@ class TrendMetrics(BaseModel):
     """Short-term volume acceleration and sentiment velocity tracking."""
     buzz_ratio: float = Field(default=1.0, description="Current 24h volume relative to baseline")
     sentiment_velocity: float = Field(default=0.0, description="Delta in sentiment score vs previous window")
+    sentiment_acceleration: float = Field(default=0.0, description="Second derivative of sentiment (rate of change of velocity)")
+    is_divergent: bool = Field(default=False, description="True if buzz volume diverges significantly from sentiment direction")
+    divergence_type: Optional[str] = Field(default=None, description="Type of divergence: 'BEARISH_PANIC_LIQUIDATION', 'BULLISH_ACCUMULATION_DIVERGENCE', or None")
     trend_verdict: TrendVerdict = Field(default=TrendVerdict.NEUTRAL_CONSOLIDATION)
     articles_24h_count: int = Field(default=1)
 
@@ -347,6 +352,70 @@ class TrendMetrics(BaseModel):
             except ValueError:
                 return v
         return v
+
+
+class SectorTrendMetrics(BaseModel):
+    """Sector-level sentiment momentum and buzz tracking metrics."""
+    sector: str = Field(..., description="Market sector name (e.g. 'Semiconductors')")
+    avg_sentiment: float = Field(default=0.0, description="Average compound sentiment score across sector articles")
+    sentiment_velocity: float = Field(default=0.0, description="Delta in sector sentiment vs prior window")
+    sentiment_acceleration: float = Field(default=0.0, description="Rate of change in sector velocity")
+    buzz_ratio: float = Field(default=1.0, description="Current volume relative to sector baseline")
+    article_count: int = Field(default=1, description="Number of sector articles in analysis window")
+    sentiment_label: SentimentLabel = Field(default=SentimentLabel.NEUTRAL)
+    trend_verdict: TrendVerdict = Field(default=TrendVerdict.NEUTRAL_CONSOLIDATION)
+
+    @field_validator("sentiment_label", mode="before")
+    @classmethod
+    def normalize_sentiment_label(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            cleaned = v.strip().upper().replace(" ", "_")
+            try:
+                return SentimentLabel(cleaned)
+            except ValueError:
+                return v
+        return v
+
+    @field_validator("trend_verdict", mode="before")
+    @classmethod
+    def normalize_trend_verdict(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            cleaned = v.strip().upper().replace(" ", "_")
+            try:
+                return TrendVerdict(cleaned)
+            except ValueError:
+                return v
+class WatchlistSettings(BaseModel):
+    """Configuration for user watchlist tickers and priority sectors."""
+    enabled: bool = Field(default=True, description="Enable watchlist matching and priority scoring boost.")
+    tickers: List[str] = Field(default_factory=list, description="Watched tickers e.g. ['$NVDA', '$AAPL', '$TSLA']")
+    sectors: List[str] = Field(default_factory=list, description="Watched priority sectors e.g. ['Aviation', 'Defense', 'Semiconductors']")
+    score_boost: int = Field(default=1, description="Confidence score boost applied to matched watchlist items (1-2)")
+
+    @field_validator("tickers", mode="before")
+    @classmethod
+    def normalize_tickers(cls, v: Any) -> List[str]:
+        if not v:
+            return []
+        if isinstance(v, str):
+            v = [t.strip() for t in v.split(",") if t.strip()]
+        normalized = []
+        for ticker in v:
+            cleaned = str(ticker).strip().upper()
+            if cleaned and not cleaned.startswith("$"):
+                cleaned = f"${cleaned}"
+            if cleaned:
+                normalized.append(cleaned)
+        return normalized
+
+    @field_validator("sectors", mode="before")
+    @classmethod
+    def normalize_sectors(cls, v: Any) -> List[str]:
+        if not v:
+            return []
+        if isinstance(v, str):
+            return [s.strip() for s in v.split(",") if s.strip()]
+        return [str(s).strip() for s in v if str(s).strip()]
 
 
 class TelegramButton(BaseModel):
@@ -443,6 +512,18 @@ class MarketImpactAnalysis(BaseModel):
         default=None,
         description="Short-term volume buzz ratio and sentiment velocity trend metrics."
     )
+    is_watchlist_match: bool = Field(
+        default=False,
+        description="True if catalyst matches user watchlist tickers or priority sectors",
+    )
+    matched_watchlist_items: List[str] = Field(
+        default_factory=list,
+        description="List of matched tickers or sectors from user watchlist",
+    )
+    sector_trends: List[SectorTrendMetrics] = Field(
+        default_factory=list,
+        description="Sector sentiment momentum metrics for affected sectors",
+    )
     disclaimer: str = Field(
         default="⚠️ News-derived hypothesis. Market pricing, valuation, and entry points were not checked.",
         description="Mandatory compliance disclaimer separating news inference from trading validation."
@@ -464,6 +545,21 @@ class MarketImpactAnalysis(BaseModel):
             return None
         if isinstance(v, dict):
             return TrendMetrics(**v)
+        return v
+
+    @field_validator("sector_trends", mode="before")
+    @classmethod
+    def normalize_sector_trends(cls, v: Any) -> List[SectorTrendMetrics]:
+        if not v:
+            return []
+        if isinstance(v, list):
+            res = []
+            for item in v:
+                if isinstance(item, dict):
+                    res.append(SectorTrendMetrics(**item))
+                else:
+                    res.append(item)
+            return res
         return v
 
     @field_validator("sec_filing_item", mode="before")

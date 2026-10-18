@@ -88,6 +88,19 @@ class SQLiteStorage(BaseStorage):
                 )
                 self._conn.execute(
                     """
+                    CREATE TABLE IF NOT EXISTS sector_sentiment_history (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        sector TEXT NOT NULL,
+                        sentiment_score REAL NOT NULL,
+                        sentiment_label TEXT NOT NULL,
+                        article_hash TEXT NOT NULL,
+                        published_at TIMESTAMP,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                    """
+                )
+                self._conn.execute(
+                    """
                     CREATE TABLE IF NOT EXISTS feed_cache (
                         url TEXT PRIMARY KEY,
                         etag TEXT,
@@ -142,6 +155,8 @@ class SQLiteStorage(BaseStorage):
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_articles_surge_level ON articles(surge_level);")
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_ticker_sentiment_ticker_created_at ON ticker_sentiment_history(ticker, created_at);")
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_ticker_sentiment_created_at ON ticker_sentiment_history(created_at);")
+                self._conn.execute("CREATE INDEX IF NOT EXISTS idx_sector_sentiment_sector_created_at ON sector_sentiment_history(sector, created_at);")
+                self._conn.execute("CREATE INDEX IF NOT EXISTS idx_sector_sentiment_created_at ON sector_sentiment_history(created_at);")
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_metrics_created_at ON llm_metrics(created_at);")
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_metrics_content_hash ON llm_metrics(content_hash);")
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_llm_metrics_model_name ON llm_metrics(model_name);")
@@ -405,6 +420,25 @@ class SQLiteStorage(BaseStorage):
                                 """,
                                 (
                                     cleaned_ticker,
+                                    sentiment_score,
+                                    sentiment_label,
+                                    article.content_hash,
+                                    published_at_str,
+                                    created_at_str,
+                                ),
+                            )
+                if analysis and analysis.affected_sectors and analysis.sentiment is not None:
+                    for sector in analysis.affected_sectors:
+                        cleaned_sector = str(sector).strip()
+                        if cleaned_sector:
+                            self._conn.execute(
+                                """
+                                INSERT INTO sector_sentiment_history (
+                                    sector, sentiment_score, sentiment_label, article_hash, published_at, created_at
+                                ) VALUES (?, ?, ?, ?, ?, ?)
+                                """,
+                                (
+                                    cleaned_sector,
                                     sentiment_score,
                                     sentiment_label,
                                     article.content_hash,
@@ -751,6 +785,129 @@ class SQLiteStorage(BaseStorage):
 
                 results.append({
                     "ticker": row_dict["ticker"],
+                    "avg_sentiment": round(avg_val, 4),
+                    "total_articles": int(row_dict["total_articles"]),
+                    "sentiment_label": label,
+                })
+            return results
+
+    def record_sector_sentiment(
+        self,
+        sector: str,
+        sentiment_score: float,
+        sentiment_label: str,
+        article_hash: str,
+        published_at: Optional[datetime] = None,
+    ) -> None:
+        """Record a sentiment history data point for a specific sector."""
+        if not sector:
+            return
+        published_at_str = published_at.isoformat() if published_at else None
+        created_at_str = datetime.now(timezone.utc).isoformat()
+        cleaned_sector = str(sector).strip()
+        label_str = sentiment_label.value if hasattr(sentiment_label, "value") else str(sentiment_label)
+
+        with self._lock:
+            if self._conn is None:
+                raise RuntimeError("Database connection is closed.")
+            with self._conn:
+                self._conn.execute(
+                    """
+                    INSERT INTO sector_sentiment_history (
+                        sector, sentiment_score, sentiment_label, article_hash, published_at, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        cleaned_sector,
+                        float(sentiment_score),
+                        label_str,
+                        article_hash,
+                        published_at_str,
+                        created_at_str,
+                    ),
+                )
+
+    def get_sector_sentiment_window(self, sector: str, hours: int = 24) -> List[Dict[str, Any]]:
+        """Retrieve sentiment history records for a sector within the past `hours`."""
+        if not sector:
+            return []
+        cutoff_dt = datetime.now(timezone.utc) - timedelta(hours=hours)
+        cutoff_iso = cutoff_dt.isoformat()
+        cleaned_sector = str(sector).strip()
+
+        sql = """
+        SELECT
+            id,
+            sector,
+            sentiment_score,
+            sentiment_label,
+            article_hash,
+            published_at,
+            created_at
+        FROM sector_sentiment_history
+        WHERE LOWER(sector) = LOWER(?)
+          AND COALESCE(published_at, created_at) >= ?
+        ORDER BY COALESCE(published_at, created_at) DESC, id DESC;
+        """
+        with self._lock:
+            if self._conn is None:
+                raise RuntimeError("Database connection is closed.")
+            cursor = self._conn.cursor()
+            cursor.execute(sql, (cleaned_sector, cutoff_iso))
+
+            rows = cursor.fetchall()
+            results: List[Dict[str, Any]] = []
+            for r in rows:
+                if isinstance(r, sqlite3.Row):
+                    results.append(dict(r))
+                else:
+                    col_names = [col[0] for col in cursor.description]
+                    results.append(dict(zip(col_names, r)))
+            return results
+
+    def get_all_sectors_trend_summary(self, hours: int = 24) -> List[Dict[str, Any]]:
+        """Return aggregate sentiment trend summaries across all sectors in the past `hours`."""
+        cutoff_dt = datetime.now(timezone.utc) - timedelta(hours=hours)
+        cutoff_iso = cutoff_dt.isoformat()
+
+        sql = """
+        SELECT
+            sector,
+            AVG(sentiment_score) AS avg_sentiment,
+            COUNT(*) AS total_articles
+        FROM sector_sentiment_history
+        WHERE (created_at >= ? OR (published_at IS NOT NULL AND published_at >= ?))
+        GROUP BY sector
+        ORDER BY total_articles DESC, avg_sentiment DESC;
+        """
+        with self._lock:
+            if self._conn is None:
+                raise RuntimeError("Database connection is closed.")
+            cursor = self._conn.cursor()
+            cursor.execute(sql, (cutoff_iso, cutoff_iso))
+            rows = cursor.fetchall()
+            results: List[Dict[str, Any]] = []
+            for r in rows:
+                row_dict = dict(r) if isinstance(r, sqlite3.Row) else {
+                    "sector": r[0],
+                    "avg_sentiment": r[1],
+                    "total_articles": r[2],
+                }
+                avg_val = float(row_dict["avg_sentiment"]) if row_dict["avg_sentiment"] is not None else 0.0
+
+                if avg_val >= 0.5:
+                    label = "VERY_BULLISH"
+                elif avg_val >= 0.15:
+                    label = "BULLISH"
+                elif avg_val <= -0.5:
+                    label = "VERY_BEARISH"
+                elif avg_val <= -0.15:
+                    label = "BEARISH"
+                else:
+                    label = "NEUTRAL"
+
+                results.append({
+                    "sector": row_dict["sector"],
                     "avg_sentiment": round(avg_val, 4),
                     "total_articles": int(row_dict["total_articles"]),
                     "sentiment_label": label,

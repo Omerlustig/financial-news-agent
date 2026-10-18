@@ -55,6 +55,13 @@ You execute your evaluation using 5 DETERMINISTIC CORE SKILLS:
    - Construct the end-to-end CAUSAL TRANSMISSION CHAIN:
      Event Facts -> Economic Mechanism -> Sector Exposure -> Company Exposure -> Implication.
    - Detail the explicit economic transmission mechanism: revenue impact, COGS/operating margin compression or expansion, regulatory fines/licensing, capex constraints, pricing power, or valuation multiple re-rating.
+   - INFLECTION / REVERSAL VS TREND CONTINUATION:
+     * Explicitly diagnose whether the catalyst represents an **inflection/reversal** (e.g., positive surprise after prolonged downtrend, cyclical trough, turnaround, or sudden margin squeeze ending an expansion) versus a **trend continuation** (e.g., persistent secular momentum, recurring beat in line with guidance).
+     * Identify whether market sentiment is poised for a directional pivot or sustained continuation.
+   - SECTORAL SPILLOVERS & ASYMMETRIC IMPACT:
+     * Explicitly evaluate 2nd-order sectoral spillovers and asymmetric consequences across sub-sectors, supply chain tiers, and competing business models (e.g., how an airline fuel surcharge differentially affects air freight logistics vs commercial passenger carriers, or how chip export controls severely curtail lithography equipment makers vs domestic foundries vs downstream cloud hyperscalers).
+   - WATCHLIST & TRANSMISSION CHANNEL DEPTH:
+     * When evaluating news affecting user watchlist tickers or priority sectors, provide deep transmission channel analysis detailing upstream suppliers, direct peers, and downstream consumers.
    - MULTI-TIER IMPACT:
      * 1st-Order Direct Corporate Impact: Primary publicly traded companies named or directly affected (e.g., $NVDA, $AAPL, $MSFT, $GOOGL, $TSLA, $CHKP, $TEVA).
      * 2nd-Order Supply Chain & Competitor Impact: Foundries, suppliers, downstream customers, direct competitors, and targeted sector ETFs (e.g., $TSM, $ASML, $SMH, $XLK, $XLE).
@@ -96,13 +103,14 @@ When evaluating official corporate filings or regulatory disclosures, calibrate 
      * Shareholder Meeting / Proxy (זימון אסיפה כללית): Baseline Impact AVERAGE or LOW, Score 4-5.
    * If an Israeli MAYA / TASE filing is identified, explicitly reference the disclosure type in 'sec_filing_item' (e.g., "MAYA: M&A / Merger", "MAYA: Profit Warning") and elaborate in 'catalyst_thesis'.
 
-BALANCED DEBATE LOGIC (FinnewsHunter Debate Framework):
+BALANCED DEBATE & ACTIONABLE RECOMMENDATION LOGIC (FinnewsHunter Debate Framework):
 Every catalyst analysis must evaluate opposing viewpoints, risks, and actionable investment opportunities across both single stocks AND entire industry sectors:
 - `affected_sectors`: Industry sectors or sub-sectors impacted (e.g. ["Airlines", "Commercial Aviation", "Defense & Aerospace", "Semiconductors", "Cybersecurity", "Energy"]).
 - `beneficiaries`: Specific public company tickers positively exposed (e.g. ["$NVDA", "$TSM"]) and/or targeted industry sector ETFs (e.g. ["$JETS", "$ITA", "$XLE"]). Opportunities can be individual stocks, broad sectors (like commercial airlines, flight companies, or defense contractors), or both!
 - `negatively_exposed`: Specific company tickers or sector ETFs negatively exposed, disadvantaged, or facing margin pressure (e.g. ["$INTC", "$BA"]).
 - `counterarguments`: Principal counterarguments, execution risks, headwinds, valuation limits, or offsetting operational factors.
 - `invalidation_conditions`: Measurable facts, metrics, regulatory actions, or earnings surprises that would disprove or invalidate this catalyst thesis.
+- `recommendation`: Concise 1-sentence actionable analyst recommendation or monitoring posture synthesizing the inflection/trend dynamic, sector spillovers, and specific ticker positioning (e.g., 'Prioritize long exposure on $NVDA/$TSM on dips while hedging downside via $SMH puts; avoid $INTC until equipment bottlenecks clear').
 
 MULTI-LANGUAGE & CROSS-MARKET COVERAGE (US + ISRAEL):
 - Ingest and process sources in both English and Hebrew seamlessly (e.g., Reuters, Bloomberg, CNBC, FT, SEC EDGAR, Globes, Calcalist, TheMarker, MAYA, TASE).
@@ -179,13 +187,19 @@ Respond with pure JSON conforming strictly to this schema:
   },
   "sec_filing_item": "Item 1.01: Entry into Material Definitive Agreement (M&A / Partnership)" | null,
   "recommendation": "Concise 1-sentence actionable analyst recommendation or monitoring posture (e.g. 'Prioritize long exposure on $NVDA/$TSM on dips; hedge downside risk via $SMH puts; avoid $INTC until next quarter').",
+  "is_watchlist_match": boolean,
+  "matched_watchlist_items": ["$NVDA", "Semiconductors"],
   "disclaimer": "⚠️ News-derived hypothesis. Market pricing, valuation, and entry points were not checked."
 }
 
 """
 
 
-def build_analyst_prompt(article: RawArticle) -> Tuple[str, str]:
+def build_analyst_prompt(
+    article: RawArticle,
+    watchlist_tickers: Optional[List[str]] = None,
+    watchlist_sectors: Optional[List[str]] = None,
+) -> Tuple[str, str]:
     """Generates the institutional financial analyst system prompt and article analysis prompt."""
     article_date = article.published_at.isoformat() if article.published_at else "Not specified"
     content_snippet = f"\nFULL CONTENT / SNIPPET:\n{article.content}" if article.content else ""
@@ -211,6 +225,16 @@ def build_analyst_prompt(article: RawArticle) -> Tuple[str, str]:
     if regulatory_context_lines:
         regulatory_snippet = "\nREGULATORY DISCLOSURE CONTEXT:\n" + "\n".join(regulatory_context_lines) + "\n"
 
+    watchlist_context_lines = []
+    if watchlist_tickers:
+        watchlist_context_lines.append(f"- Watched Priority Tickers: {', '.join(watchlist_tickers)}")
+    if watchlist_sectors:
+        watchlist_context_lines.append(f"- Watched Priority Sectors: {', '.join(watchlist_sectors)}")
+
+    watchlist_snippet = ""
+    if watchlist_context_lines:
+        watchlist_snippet = "\nWATCHLIST CONTEXT (PRIORITY SURVEILLANCE):\n" + "\n".join(watchlist_context_lines) + "\n"
+
     user_prompt = f"""Analyze the following market news article with institutional Wall Street rigor:
 
 ARTICLE DETAILS:
@@ -222,18 +246,20 @@ ARTICLE DETAILS:
 SUMMARY:
 {article.summary or "No summary provided."}
 {content_snippet}
-{regulatory_snippet}
+{regulatory_snippet}{watchlist_snippet}
 EVALUATION INSTRUCTIONS:
 1. extract_financial_event: Extract verified facts, attributed statements, entities, and timestamps.
 2. verify_event: Check confirmation vs speculation; reject syndicated copies as independent proof.
 3. analyze_financial_impact: Formulate full causal chain (facts -> economic mechanism -> sectors -> company exposure -> implication).
+   * Inflection vs Continuation: Determine whether this event indicates an inflection/reversal (e.g. turnaround from prolonged downtrend, unexpected cyclical trough, margin squeeze) versus a trend continuation.
+   * Sectoral Spillovers: Explicitly evaluate 2nd-order sectoral spillovers and asymmetric impacts across sub-industries and supply chains (e.g. airline fuel surcharge impact on freight vs passenger carriers, or chip export controls on equipment makers vs foundries).
+   * Watchlist Focus: If article affects watched tickers or sectors, provide deep transmission channel analysis.
 4. evaluate_alert_gates: Rigorously evaluate hard gates (novelty, verification, direct company exposure). If verification fails or exposure is indirect, status CANNOT be OPPORTUNITY_CANDIDATE.
-5. Balanced Debate: Identify beneficiaries ($TICKER), negatively exposed ($TICKER), counterarguments, and invalidation conditions.
+5. Balanced Debate & Recommendation: Identify beneficiaries ($TICKER), negatively exposed ($TICKER), counterarguments, invalidation conditions, and formulate a clear 1-sentence actionable 'recommendation'.
 6. Multi-language: For Hebrew headlines/content (e.g., Globes, Calcalist, TheMarker, MAYA, TASE), accurately parse Israeli entities and normalize all JSON outputs to English.
 7. Regulatory Taxonomy: If SEC 8-K filing items or MAYA disclosure categories are present or detected above, calibrate baseline severity accordingly and explicitly set 'sec_filing_item'.
 8. Financial Sentiment: Evaluate domain financial tone (Loughran-McDonald lexicon and catalyst polarity) and populate 'sentiment' with calibrated score (-1.0 to 1.0), categorical label, positive/negative/neutral probabilities, and confidence.
 
 Return ONLY valid JSON adhering strictly to the required MarketImpactAnalysis schema.
-
 """
     return SYSTEM_ANALYST_PROMPT, user_prompt
