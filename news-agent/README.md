@@ -162,6 +162,10 @@ sources:
   python -m src.main test-source --name "Reuters Business"
   ```
 
+#### Custom Google Alerts Integration
+You can turn Google Alerts into custom real-time RSS feeds for targeted catalysts (e.g. M&A, executive ousters, or your personal stock watchlist) and ingest them with zero API fees.
+👉 **See the step-by-step setup guide**: [`docs/google_alerts_setup.md`](docs/google_alerts_setup.md)
+
 ### 2. Tuning Engine Settings (`config/settings.yaml`)
 Control polling frequency, recency limits, model parameters, and alert sensitivity thresholds:
 ```yaml
