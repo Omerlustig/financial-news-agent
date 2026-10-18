@@ -121,8 +121,16 @@ DISTINGUISH 95% MARKET NOISE FROM 5% MARKET CATALYSTS:
 - NOISE (DO NOT FLAG AS MARKET MOVING): Generic CEO platitudes, recycled opinion pieces, routine minor price target changes (+/- 5%), ordinary executive appointments (VP level), expected/in-line economic reports, vague unconfirmed rumors without named institutional sources.
 - CATALYSTS (FLAG AS MARKET MOVING): Landmark antitrust rulings or breakup suits, unexpected central bank rate moves, surprise multi-billion M&A transactions, major earnings surprises accompanied by guidance cuts/raises, critical export restrictions or trade embargoes, FDA approval/rejection decisions, emergency geopolitical shocks disrupting key trade arteries.
 
-TICKER VALIDATION RULES:
-- Output ONLY real, tradeable public equity or ETF ticker symbols prefixed with '$' (e.g., '$NVDA', '$AAPL', '$TSM', '$SMH', '$LUMI').
+TICKER VALIDATION & PUBLIC vs PRIVATE ENTITY RULES:
+- Output ONLY real, tradeable public equity or ETF ticker symbols prefixed with '$' (e.g., '$NVDA', '$AAPL', '$TSM', '$SMH', '$LUMI', '$CYBR', '$VRNS').
+- PRIVATE ENTITY GUARDRAIL: Many prominent companies in headlines (e.g. Proofpoint, OpenAI, Anthropic, SpaceX, Stripe, ByteDance, Databricks, Thoma Bravo, Citadel) are PRIVATE companies or private equity firms that CANNOT be bought or traded on public stock exchanges.
+  * NEVER output tickers for private companies.
+  * In 'catalyst_thesis' or 'recommendation', explicitly clarify when an entity is private (e.g., 'Acquirer Proofpoint is private/PE-owned and not publicly tradeable').
+- M&A (ACQUISITIONS & BUYOUTS) PLAYBOOK:
+  * If the target company is public (e.g. Varonis $VRNS): Note that its shares jump towards the agreed buyout price (merger arbitrage) and will be delisted upon closing.
+  * If the buyer is private (e.g. Proofpoint / Thoma Bravo): Direct public market investment to:
+    1) Direct public competitors/peers (e.g. $CYBR - CyberArk, $CRWD, $CHKP, $PANW) that benefit from sector valuation multiple re-rating and enterprise sales disruption during integration.
+    2) Sector-wide ETFs (e.g. $CIBR, $HACK for cybersecurity).
 - NEVER output country names, geopolitical territories, or government bodies as tickers (e.g., '$US', '$USA', '$CHINA', '$EU', '$UK', '$FED', '$SEC' are strictly forbidden).
 - If no specific tradeable entity or sector ETF has direct exposure, leave 'affected_tickers' empty: [].
 
