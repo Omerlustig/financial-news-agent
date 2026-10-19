@@ -1631,6 +1631,67 @@ def test_pipeline_force_mode_strictly_enforces_gates_and_suppresses_non_qualifyi
     assert mock_notifier.send_alert.call_args[0][0].title == art_qualifying.title
 
 
+def test_pipeline_fact_verification_disabled_allows_commercial_report_alert(tmp_path):
+    """Verify that when enable_fact_verification is False, high-impact commercial news triggers alert."""
+    db_file = str(tmp_path / "test_no_fact_ver.db")
+    storage = SQLiteStorage(db_path=db_file)
+    mock_analyzer = MagicMock()
+    mock_notifier = MagicMock()
+    mock_notifier.send_alert.return_value = True
+
+    art_vw = RawArticle(
+        title="Volkswagen plans global salary freeze through 2030 - report",
+        url="https://seekingalpha.com/news/4654111-volkswagen-plans",
+        source_name="Seeking Alpha Market News",
+    )
+
+    analysis_vw = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=7,
+        impact_grade=ImpactGrade.HIGH,
+        affected_tickers=["$VWAGY"],
+        status=EventStatus.WATCHLIST,  # Initially WATCHLIST due to rumor
+        directional_stance=DirectionalStance.BEARISH,
+        hard_gates=HardGates(
+            is_novel=True,
+            is_verified=False,  # Unverified single commercial source
+            has_direct_exposure=True,
+            passes_all_gates=False,
+        ),
+        summary="Volkswagen plans 5-year wage freeze.",
+        catalyst_thesis="Fixed cost reduction vs union strikes.",
+    )
+
+    mock_analyzer.analyze.return_value = analysis_vw
+
+    mock_technical = MagicMock()
+    mock_technical.get_technical_summary.return_value = TechnicalIndicatorSummary(
+        symbol="$VWAGY", recommendation="SELL", close_price=350.0
+    )
+    mock_technical.calculate_technical_confluence.return_value = (0.5, "Bearish Confluence", {})
+
+    pipeline = Pipeline(
+        storage=storage,
+        analyzer=mock_analyzer,
+        notifier=mock_notifier,
+        technical_engine=mock_technical,
+        enable_fact_verification=False,  # Fact verification disabled!
+        min_score=6,
+    )
+
+    summary = pipeline.process_articles([art_vw])
+
+    assert summary.analyzed == 1
+    # Alert successfully dispatched because fact verification gate was disabled!
+    assert summary.alerted == 1
+    mock_notifier.send_alert.assert_called_once()
+    sent_art, sent_analysis = mock_notifier.send_alert.call_args[0]
+    assert sent_art.title == art_vw.title
+    assert sent_analysis.status == EventStatus.OPPORTUNITY_CANDIDATE
+    assert sent_analysis.hard_gates.passes_all_gates is True
+
+
+
 
 
 

@@ -43,6 +43,7 @@ class FilterSettings(BaseModel):
     min_confidence_score: int = Field(default=6, ge=1, le=10, description="Minimum score to trigger notification.")
     min_impact_grade: ImpactGrade = Field(default=ImpactGrade.HIGH, description="Minimum severity grade (e.g. HIGH, CRITICAL).")
     alert_on_all: bool = Field(default=False, description="If True, bypasses filter threshold for testing.")
+    enable_fact_verification: bool = Field(default=False, description="Enforce strict primary/multi-source fact verification gate.")
 
     @field_validator("min_impact_grade", mode="before")
     @classmethod

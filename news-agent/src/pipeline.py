@@ -104,11 +104,20 @@ class Pipeline:
         fetch_timeout: float = 15.0,
         batch_size_per_source: Optional[int] = None,
         max_article_age_minutes: Optional[int] = None,
+        enable_fact_verification: Optional[bool] = None,
     ) -> None:
         self.settings = settings
         self.force = force
         self.fetch_timeout = fetch_timeout
         self.fetcher = fetcher
+
+        # Fact verification toggle (disabled per user request)
+        if enable_fact_verification is not None:
+            self.enable_fact_verification = bool(enable_fact_verification)
+        elif settings is not None and hasattr(settings.filter, "enable_fact_verification"):
+            self.enable_fact_verification = bool(settings.filter.enable_fact_verification)
+        else:
+            self.enable_fact_verification = False
 
         # Watchlist resolution
         if watchlist is not None:
@@ -280,15 +289,24 @@ class Pipeline:
             return False
 
         # 2. Hard Gate: Quality gating verification, novelty, and direct exposure
-        if analysis.hard_gates is not None and not analysis.hard_gates.passes_all_gates:
-            logger.info(
-                "Alert suppressed: hard gates failed [novel=%s, verified=%s, direct_exposure=%s] "
-                "(audit reason: quality gating criteria failed)",
-                analysis.hard_gates.is_novel,
-                analysis.hard_gates.is_verified,
-                analysis.hard_gates.has_direct_exposure,
-            )
-            return False
+        if analysis.hard_gates is not None:
+            if self.enable_fact_verification and not analysis.hard_gates.passes_all_gates:
+                logger.info(
+                    "Alert suppressed: hard gates failed [novel=%s, verified=%s, direct_exposure=%s] "
+                    "(audit reason: quality gating criteria failed)",
+                    analysis.hard_gates.is_novel,
+                    analysis.hard_gates.is_verified,
+                    analysis.hard_gates.has_direct_exposure,
+                )
+                return False
+            elif not self.enable_fact_verification and not (analysis.hard_gates.is_novel and analysis.hard_gates.has_direct_exposure):
+                logger.info(
+                    "Alert suppressed: hard gates failed [novel=%s, direct_exposure=%s] "
+                    "(audit reason: novelty or direct exposure failed)",
+                    analysis.hard_gates.is_novel,
+                    analysis.hard_gates.has_direct_exposure,
+                )
+                return False
 
         # 3. CLI Testing Override (bypasses threshold/materiality for valid OPPORTUNITY_CANDIDATE events)
         if self.alert_on_all:
@@ -410,6 +428,8 @@ class Pipeline:
             provenance, statements, fact_score, is_verified = self.fact_verification_engine.extract_and_verify_facts(
                 canonical, cluster.articles
             )
+            if not self.enable_fact_verification:
+                is_verified = True
 
             try:
                 analysis = self.analyzer.analyze(canonical)
@@ -434,12 +454,29 @@ class Pipeline:
 
             # Audit hard-gates against verification and novelty
             if analysis.hard_gates is not None:
-                if not is_verified:
+                if self.enable_fact_verification and not is_verified:
                     analysis.hard_gates.is_verified = False
                     analysis.hard_gates.passes_all_gates = False
+                elif not self.enable_fact_verification:
+                    analysis.hard_gates.is_verified = True
+                    analysis.hard_gates.passes_all_gates = bool(
+                        analysis.hard_gates.is_novel and analysis.hard_gates.has_direct_exposure
+                    )
                 if novelty_state == NoveltyState.PRICED_IN_OR_RECYCLED:
                     analysis.hard_gates.is_novel = False
                     analysis.hard_gates.passes_all_gates = False
+
+            # If fact verification is disabled and article was only demoted due to verification, promote to candidate
+            if (
+                not self.enable_fact_verification
+                and analysis.status in (EventStatus.UNVERIFIED, EventStatus.WATCHLIST)
+                and analysis.hard_gates is not None
+                and analysis.hard_gates.passes_all_gates
+                and analysis.is_market_moving
+                and analysis.confidence_score >= self.min_confidence_score
+                and (self.min_impact_grade is None or analysis.impact_grade >= self.min_impact_grade)
+            ):
+                analysis.status = EventStatus.OPPORTUNITY_CANDIDATE
 
             # If article was not analyzed by LLM (rate limit exhausted or credentials unavailable),
             # do not persist to DB/cache so it will be retried in the next polling cycle.
@@ -606,6 +643,7 @@ class Pipeline:
                 min_event_quality=gate_min_event,
                 min_opportunity_score=gate_min_opp,
                 technical_confluence_boost=confluence_mod,
+                enable_fact_verification=self.enable_fact_verification,
             )
             analysis.two_layer_gate = gate_decision
 

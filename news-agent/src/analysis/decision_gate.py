@@ -47,6 +47,7 @@ class TwoLayerGateEngine:
         is_verified: bool = True,
         corroboration_count: int = 1,
         novelty_state: Optional[Union[NoveltyState, str]] = None,
+        enable_fact_verification: bool = True,
     ) -> float:
         """Evaluate Layer 1 Event Information Quality Score (0.0 to 10.0).
 
@@ -54,7 +55,7 @@ class TwoLayerGateEngine:
         - Source provenance tier (PRIMARY_OFFICIAL=9.0, TIER1_FINANCIAL=8.0, COMMERCIAL_NEWS=6.5, UNVERIFIED_BLOG=4.0)
         - Corroboration boost (+1.0 for 2 sources, +2.0 for 3+ sources)
         - Novelty adjustment (GENUINE_SURPRISE=+0.5, IN_LINE_CONFIRMATION=0.0, PRICED_IN_OR_RECYCLED=-3.0)
-        - Verification audit (cap at 5.0 if unverified, anonymous rumor, or unverified blog)
+        - Verification audit (cap at 5.0 if unverified, anonymous rumor, or unverified blog when enabled)
         """
         # Resolve Provenance
         resolved_prov = provenance or getattr(analysis, "provenance_level", None)
@@ -101,15 +102,19 @@ class TwoLayerGateEngine:
         raw_score = baseline + corrob_boost + novelty_adj
 
         # Verification audit: cap at 5.0 if not verified, unconfirmed rumor, or unverified blog
-        has_unconfirmed_rumor = (
-            not is_verified
-            or resolved_prov == ProvenanceLevel.UNVERIFIED_BLOG
-            or getattr(analysis, "status", None) == EventStatus.UNVERIFIED
-            or (getattr(analysis, "hard_gates", None) is not None and not analysis.hard_gates.is_verified)
-        )
-
-        if has_unconfirmed_rumor:
-            raw_score = min(raw_score, 5.0)
+        if enable_fact_verification:
+            has_unconfirmed_rumor = (
+                not is_verified
+                or resolved_prov == ProvenanceLevel.UNVERIFIED_BLOG
+                or getattr(analysis, "status", None) == EventStatus.UNVERIFIED
+                or (getattr(analysis, "hard_gates", None) is not None and not analysis.hard_gates.is_verified)
+            )
+            if has_unconfirmed_rumor:
+                raw_score = min(raw_score, 5.0)
+        else:
+            # When fact verification gate is disabled, only cap outright unverified blogs
+            if resolved_prov == ProvenanceLevel.UNVERIFIED_BLOG:
+                raw_score = min(raw_score, 5.0)
 
         quality_score = max(0.0, min(10.0, raw_score))
         return round(quality_score, 2)
@@ -163,14 +168,16 @@ class TwoLayerGateEngine:
         min_event_quality: float = 8.0,
         min_opportunity_score: float = 8.0,
         technical_confluence_boost: float = 0.0,
+        enable_fact_verification: bool = True,
     ) -> TwoLayerGateDecision:
         """Evaluate both Layer 1 and Layer 2 gates, producing final decision and institutional verdict."""
         # Check hard gates verification status if present
         is_ver = True
-        if analysis.hard_gates is not None and not analysis.hard_gates.is_verified:
-            is_ver = False
-        if getattr(analysis, "status", None) == EventStatus.UNVERIFIED:
-            is_ver = False
+        if enable_fact_verification:
+            if analysis.hard_gates is not None and not analysis.hard_gates.is_verified:
+                is_ver = False
+            if getattr(analysis, "status", None) == EventStatus.UNVERIFIED:
+                is_ver = False
 
         event_quality_score = self.evaluate_event_quality(
             analysis=analysis,
@@ -178,6 +185,7 @@ class TwoLayerGateEngine:
             is_verified=is_ver,
             corroboration_count=getattr(analysis, "corroboration_count", 1),
             novelty_state=getattr(analysis, "novelty_state", None),
+            enable_fact_verification=enable_fact_verification,
         )
 
         opportunity_score = self.evaluate_opportunity_score(
@@ -190,8 +198,13 @@ class TwoLayerGateEngine:
 
         # Hard gates check: if hard gates failed, force both passes to False
         hard_gates_failed = False
-        if analysis.hard_gates is not None and not analysis.hard_gates.passes_all_gates:
-            hard_gates_failed = True
+        if analysis.hard_gates is not None:
+            if enable_fact_verification and not analysis.hard_gates.passes_all_gates:
+                hard_gates_failed = True
+            elif not enable_fact_verification and not (analysis.hard_gates.is_novel and analysis.hard_gates.has_direct_exposure):
+                hard_gates_failed = True
+
+        if hard_gates_failed:
             passes_event_quality_gate = False
             passes_opportunity_gate = False
 

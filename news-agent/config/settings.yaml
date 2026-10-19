@@ -11,6 +11,7 @@ filter:
   min_confidence_score: 6
   min_impact_grade: "HIGH" # Options: LOW, AVERAGE (or MEDIUM), HIGH, CRITICAL
   alert_on_all: false
+  enable_fact_verification: false # Fact-verification gate toggle (currently disabled per request)
 
 llm:
   model: "gemini/gemini-3.8-flash"
