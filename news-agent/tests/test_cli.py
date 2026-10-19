@@ -6,7 +6,15 @@ from typer.testing import CliRunner
 
 from src.cli import app
 from src.storage.sqlite import SQLiteStorage
-from src.models import RawArticle, MarketImpactAnalysis, ImpactGrade, EventStatus, DirectionalStance
+from src.models import (
+    RawArticle,
+    MarketImpactAnalysis,
+    ImpactGrade,
+    EventStatus,
+    DirectionalStance,
+    CausalChain,
+    HardGates,
+)
 
 
 @pytest.fixture
@@ -312,5 +320,65 @@ def test_performance_command_update_flag(temp_cli_db):
         result = runner.invoke(app, ["performance", "--update", "--db", db_path])
         assert result.exit_code == 0
         assert "Updated 1 forward return quote" in result.stdout
+
+
+def test_push_pending_dry_run_and_dispatch(temp_cli_db):
+    """Verify push-pending identifies qualifying unalerted articles, dry runs, and dispatches."""
+    storage, db_path = temp_cli_db
+    now = datetime.now(timezone.utc)
+
+    # Seed an article that qualifies: score 8, HIGH, with tickers
+    raw = RawArticle(
+        title="Test Company Signs Transformational $5B Contract",
+        url="https://example.com/test-article",
+        source_name="Reuters Business",
+        published_at=now,
+        content="Test Company has signed a definitive $5B deal.",
+    )
+    analysis = MarketImpactAnalysis(
+        summary="Test Company has signed a definitive $5B deal.",
+        catalyst_thesis="Material accretive contract expansion.",
+        impact_grade=ImpactGrade.HIGH,
+        confidence_score=8,
+        affected_tickers=["$TEST"],
+        affected_sectors=["Technology"],
+        is_market_moving=True,
+        status=EventStatus.OPPORTUNITY_CANDIDATE,
+        directional_stance=DirectionalStance.BULLISH,
+        causal_chain=CausalChain(
+            event_facts="Test Company signed contract.",
+            economic_mechanism="Accelerated revenue recognition.",
+            affected_sectors=["Technology"],
+            beneficiaries=["$TEST"],
+            negatively_exposed=[],
+            counterarguments="Execution risks exist.",
+            invalidation_conditions="Deal canceled by counterparty.",
+        ),
+        hard_gates=HardGates(is_novel=True, is_verified=True, has_direct_exposure=True, passes_all_gates=True),
+    )
+    storage.record_article(raw, analysis, alerted=False)
+
+    runner = CliRunner()
+
+    # 1. Test dry-run mode
+    res_dry = runner.invoke(app, ["push-pending", "--dry-run", "--db", db_path])
+    assert res_dry.exit_code == 0
+    assert "Found 1 qualifying article(s)" in res_dry.stdout
+    assert "Dry run mode active" in res_dry.stdout
+
+    # Verify article is still unalerted in storage
+    stats_before = storage.get_stats()
+    assert stats_before["alerted_count"] == 0
+
+    # 2. Test live dispatch mode with mocked notifier
+    with patch("src.notification.telegram.TelegramNotifier.send_alert", return_value=True):
+        res_live = runner.invoke(app, ["push-pending", "--delay", "0.0", "--db", db_path])
+        assert res_live.exit_code == 0
+        assert "SENT & RECORDED" in res_live.stdout
+        assert "Dispatch complete: 1 sent successfully" in res_live.stdout
+
+    # Verify article is now marked alerted in storage
+    stats_after = storage.get_stats()
+    assert stats_after["alerted_count"] == 1
 
 

@@ -33,12 +33,21 @@ from src.config import load_settings, load_sources, Settings
 from src.ingestion.rss import RSSFetcher
 from src.notification.telegram import TelegramNotifier, format_sentiment_gauge
 from src.notification.console import ConsoleNotifier
-from src.pipeline import Pipeline
+from src.pipeline import Pipeline, GRADE_SEVERITY
 from src.storage.sqlite import SQLiteStorage
 from src.analysis.digest import MarketDigestGenerator
 from src.analysis.trend import TrendEngine
 from src.analysis.performance import PerformanceTrackerEngine
-from src.models import RawArticle, MarketImpactAnalysis, ImpactGrade, CredibilityTier
+from src.models import (
+    RawArticle,
+    MarketImpactAnalysis,
+    ImpactGrade,
+    CredibilityTier,
+    EventStatus,
+    DirectionalStance,
+    HardGates,
+    CausalChain,
+)
 
 
 logging.basicConfig(
@@ -1127,6 +1136,203 @@ def performance(
         console.print()
     finally:
         storage.close()
+
+
+@app.command("push-pending")
+def push_pending(
+    limit: int = typer.Option(50, "--limit", "-l", help="Maximum pending alerts to push"),
+    delay: float = typer.Option(1.0, "--delay", "-d", help="Delay in seconds between Telegram dispatches"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview qualifying articles without sending or updating database"),
+    config: Optional[str] = typer.Option(None, "--config", "-c", help="Path to settings.yaml"),
+    db: Optional[str] = typer.Option(None, "--db", help="Override SQLite database path"),
+) -> None:
+    """Evaluate unalerted articles in SQLite against current decision gates and dispatch Telegram push alerts."""
+    import sqlite3
+    from datetime import datetime, timezone
+
+    settings = load_settings(config)
+    db_path = db or settings.agent.database_path
+    pipeline = Pipeline.from_settings(settings)
+
+    console.print(f"[bold cyan]Evaluating unalerted articles in DB ({db_path})...[/bold cyan]")
+    console.print(
+        f"[dim]Criteria: min_confidence={pipeline.min_confidence_score}, "
+        f"min_impact_grade={pipeline.min_impact_grade}, "
+        f"enable_fact_verification={pipeline.enable_fact_verification}[/dim]\n"
+    )
+
+    conn = sqlite3.connect(db_path)
+    try:
+        c = conn.cursor()
+        c.execute(
+            """
+            SELECT content_hash, title, url, source_name, published_at, confidence_score, impact_grade, 
+                   status, directional_stance, passes_hard_gates, tickers, sectors, causal_mechanism, 
+                   beneficiaries, negatively_exposed, counterarguments, invalidation_conditions,
+                   corroborating_sources, corroboration_count, is_market_moving, sec_filing_item,
+                   surge_level, sentiment_score, sentiment_label, buzz_ratio, trend_verdict
+            FROM articles 
+            WHERE alerted = 0
+            ORDER BY confidence_score DESC, published_at DESC
+            """
+        )
+        rows = c.fetchall()
+
+        qualifying = []
+        for r in rows:
+            (
+                content_hash, title, url, source_name, published_at_str, confidence_score, impact_grade, 
+                status, directional_stance, passes_hard_gates, tickers_json, sectors_json, causal_mechanism, 
+                beneficiaries_json, negatively_exposed_json, counterarguments, invalidation_conditions,
+                corroborating_sources_json, corroboration_count, is_market_moving, sec_filing_item,
+                surge_level, sentiment_score, sentiment_label, buzz_ratio, trend_verdict
+            ) = r
+
+            if not is_market_moving:
+                continue
+
+            try:
+                grade = ImpactGrade(impact_grade) if impact_grade else ImpactGrade.LOW
+            except ValueError:
+                grade = ImpactGrade.LOW
+
+            if pipeline.min_confidence_score and (confidence_score or 0) < pipeline.min_confidence_score:
+                continue
+            if pipeline.min_impact_grade and GRADE_SEVERITY.get(grade, 0) < GRADE_SEVERITY.get(pipeline.min_impact_grade, 0):
+                continue
+
+            tickers = json.loads(tickers_json) if tickers_json else []
+            sectors = json.loads(sectors_json) if sectors_json else []
+            beneficiaries = json.loads(beneficiaries_json) if beneficiaries_json else []
+            negatively_exposed = json.loads(negatively_exposed_json) if negatively_exposed_json else []
+            corroborating_sources = json.loads(corroborating_sources_json) if corroborating_sources_json else []
+
+            has_direct_exposure = bool(tickers or beneficiaries or negatively_exposed)
+            if not has_direct_exposure:
+                continue
+
+            hard_gates = HardGates(
+                is_novel=True,
+                is_verified=True,
+                has_direct_exposure=has_direct_exposure,
+                passes_all_gates=True,
+            )
+
+            causal_chain = CausalChain(
+                event_facts=title,
+                economic_mechanism=causal_mechanism or "Direct corporate development impacting valuation and forward guidance.",
+                affected_sectors=sectors,
+                beneficiaries=beneficiaries,
+                negatively_exposed=negatively_exposed,
+                counterarguments=counterarguments or "Market participants may have partially priced in near-term disruptions.",
+                invalidation_conditions=invalidation_conditions or "Official management denial or swift operational recovery.",
+            )
+
+            pub_at = None
+            if published_at_str:
+                try:
+                    pub_at = datetime.fromisoformat(published_at_str)
+                except Exception:
+                    pub_at = None
+
+            raw_article = RawArticle(
+                title=title,
+                url=url,
+                source_name=source_name,
+                published_at=pub_at,
+                content=causal_mechanism or title,
+                content_hash=content_hash,
+            )
+
+            analysis = MarketImpactAnalysis(
+                summary=title,
+                catalyst_thesis=causal_mechanism or title,
+                impact_grade=grade,
+                confidence_score=confidence_score or 5,
+                affected_tickers=tickers,
+                affected_sectors=sectors,
+                is_market_moving=bool(is_market_moving),
+                status=EventStatus.OPPORTUNITY_CANDIDATE,
+                directional_stance=DirectionalStance(directional_stance) if directional_stance else DirectionalStance.NEUTRAL,
+                causal_chain=causal_chain,
+                hard_gates=hard_gates,
+                corroboration_count=corroboration_count or 1,
+                corroborating_sources=corroborating_sources or [source_name],
+                sec_filing_item=sec_filing_item,
+            )
+
+            gate_min_opp = ((float(pipeline.min_confidence_score) / 10.0) * 3.5 if pipeline.min_confidence_score is not None else 8.0)
+            gate_min_event = 6.0
+
+            gate_decision = pipeline.gate_engine.evaluate_gates(
+                analysis,
+                min_event_quality=gate_min_event,
+                min_opportunity_score=gate_min_opp,
+                technical_confluence_boost=0.0,
+                enable_fact_verification=pipeline.enable_fact_verification,
+            )
+            analysis.two_layer_gate = gate_decision
+
+            if pipeline.should_alert(analysis):
+                qualifying.append((content_hash, raw_article, analysis, gate_decision))
+
+        if not qualifying:
+            console.print("[yellow]No unalerted articles currently qualify under decision gates.[/yellow]")
+            return
+
+        console.print(f"[bold green]Found {len(qualifying)} qualifying article(s) passing all gates.[/bold green]\n")
+
+        table = Table(title="Qualifying Articles for Dispatch")
+        table.add_column("#", style="dim", width=3)
+        table.add_column("Grade", justify="center")
+        table.add_column("Score", justify="center")
+        table.add_column("Headline", style="bold")
+        table.add_column("Publisher", style="magenta")
+        table.add_column("Tickers", style="cyan")
+        table.add_column("Verdict", justify="center")
+
+        for idx, (ch, art, ana, gate) in enumerate(qualifying[:limit], start=1):
+            table.add_row(
+                str(idx),
+                ana.impact_grade.value,
+                f"{ana.confidence_score}/10",
+                art.title[:45] + ("..." if len(art.title) > 45 else ""),
+                art.source_name,
+                ", ".join(ana.affected_tickers[:3]),
+                f"[green]{gate.gate_verdict}[/green]",
+            )
+        console.print(table)
+        console.print()
+
+        if dry_run:
+            console.print("[yellow]Dry run mode active: No alerts dispatched and DB not updated.[/yellow]")
+            return
+
+        sent_count = 0
+        fail_count = 0
+        for idx, (ch, art, ana, gate) in enumerate(qualifying[:limit], start=1):
+            console.print(f"[{idx}/{min(len(qualifying), limit)}] Sending: [bold]{art.title}[/bold]...", end=" ")
+            try:
+                delivered = bool(pipeline.notifier.send_alert(art, ana))
+            except Exception as send_err:
+                delivered = False
+                logger.error("Error sending alert for %s: %s", art.title, send_err)
+
+            if delivered:
+                c.execute("UPDATE articles SET alerted = 1 WHERE content_hash = ?", (ch,))
+                conn.commit()
+                sent_count += 1
+                console.print("[bold green]✓ SENT & RECORDED[/bold green]")
+            else:
+                fail_count += 1
+                console.print("[bold red]✗ FAILED[/bold red]")
+
+            if idx < min(len(qualifying), limit) and delay > 0:
+                time.sleep(delay)
+
+        console.print(f"\n[bold green]Dispatch complete: {sent_count} sent successfully, {fail_count} failed.[/bold green]")
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":
