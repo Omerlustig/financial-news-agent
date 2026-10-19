@@ -200,6 +200,7 @@ class MarketImpactAnalyzer:
                         "model": target_model,
                         "messages": messages,
                         "response_format": {"type": "json_object"},
+                        "timeout": 45.0,
                     }
                     if not ("gemini-3" in target_model or "gemini/gemini-3" in target_model):
                         completion_kwargs["temperature"] = self.temperature
