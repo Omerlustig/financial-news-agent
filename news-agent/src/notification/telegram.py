@@ -617,15 +617,24 @@ def format_clean_opportunity_item(
 
     # Behind the lines (subtext)
     subtext = getattr(analysis, "subtext_analysis", None)
-    if not subtext and analysis.causal_chain and analysis.causal_chain.economic_mechanism:
-        subtext = analysis.causal_chain.economic_mechanism
-    elif not subtext and analysis.catalyst_thesis:
-        subtext = analysis.catalyst_thesis
     if subtext:
         subtext = subtext.strip()
-        if len(subtext) > 220:
-            subtext = subtext[:217] + "..."
+        if len(subtext) > 200:
+            subtext = subtext[:197] + "..."
         lines.append(f"• <b>Behind The Lines:</b> {escape_html(subtext)}")
+
+    # Why it matters (economic transmission mechanism)
+    mechanism = None
+    if analysis.causal_chain and analysis.causal_chain.economic_mechanism:
+        mechanism = analysis.causal_chain.economic_mechanism.strip()
+    elif analysis.catalyst_thesis:
+        mechanism = analysis.catalyst_thesis.strip()
+
+    if mechanism and mechanism.lower() != catalyst_text.lower():
+        if not subtext or mechanism.lower() != subtext.lower():
+            if len(mechanism) > 180:
+                mechanism = mechanism[:177] + "..."
+            lines.append(f"• <b>Why It Matters:</b> {escape_html(mechanism)}")
 
     # Actionable positioning (Favor vs Avoid/Hedge)
     action_parts: List[str] = []
@@ -664,6 +673,23 @@ def format_clean_opportunity_item(
         lines.append(f"📰 {escape_html(source_name)}")
 
     return "\n".join(lines)
+
+
+def format_clean_telegram_message(
+    article: RawArticle,
+    analysis: MarketImpactAnalysis,
+    directional_stance: Optional[str] = None,
+) -> str:
+    """Format an individual catalyst alert into a focused, short, zero-noise Telegram message."""
+    score = analysis.confidence_score if analysis.confidence_score is not None else 0
+    grade = (
+        getattr(analysis.impact_grade, "value", str(analysis.impact_grade)).upper()
+        if analysis.impact_grade
+        else "HIGH"
+    )
+    header = f"🚨 <b>[OPPORTUNITY CANDIDATE | Score: {score}/10 | {escape_html(grade)}]</b>\n"
+    body = format_clean_opportunity_item(article, analysis, index=None)
+    return safe_truncate_html(f"{header}\n{body}")
 
 
 def format_batch_telegram_message(items: List[Tuple[RawArticle, MarketImpactAnalysis]]) -> str:
@@ -740,7 +766,7 @@ class TelegramNotifier(BaseNotifier):
             return False
 
         try:
-            message = format_telegram_message(article, analysis)
+            message = format_clean_telegram_message(article, analysis)
 
             button_row: List[Dict[str, str]] = []
 
