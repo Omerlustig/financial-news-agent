@@ -136,6 +136,12 @@ class ConsoleNotifier(BaseNotifier):
         self.console.print()
         return True
 
+    def send_batch_alerts(self, items: list) -> bool:
+        """Format and print batch alerts to the console."""
+        for art, ana in items:
+            self.send_alert(art, ana)
+        return True
+
     def send_message(self, text: str, reply_markup: Optional[Dict[str, Any]] = None) -> bool:
         """Strip HTML tags and print message payload directly to the terminal."""
         cleaned_text = _strip_html(text)

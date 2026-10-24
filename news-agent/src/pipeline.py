@@ -947,7 +947,7 @@ class Pipeline:
         # 5. Batch dispatching: combine qualified opportunities from this cycle into 1 unified push
         if getattr(self, "batch_notifications", False) and warranted_alerts:
             batch_success = False
-            if len(warranted_alerts) > 1 and hasattr(self.notifier, "send_batch_alerts") and callable(self.notifier.send_batch_alerts):
+            if hasattr(self.notifier, "send_batch_alerts") and callable(self.notifier.send_batch_alerts):
                 try:
                     batch_success = bool(self.notifier.send_batch_alerts(warranted_alerts))
                 except Exception as exc:

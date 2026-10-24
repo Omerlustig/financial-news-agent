@@ -313,6 +313,9 @@ def run_once(
     settings = load_settings(config)
     sources_list = load_sources(sources)
 
+    if not getattr(settings.telegram, "is_configured", False):
+        console.print("[dim yellow]ℹ️ Telegram not configured (running in Local Console mode - alerts will display in terminal).[/dim yellow]")
+
     pipeline = Pipeline(
         settings=settings,
         sources=sources_list,
@@ -337,11 +340,15 @@ def run_once(
         console.print(table)
 
         if summary.alerted == 0:
-            console.print("[yellow bold]ℹ️ No articles met the alerting criteria to send to Telegram in this cycle (0 alerts sent).[/yellow bold]")
+            console.print("[yellow bold]ℹ️ No articles met the alerting criteria in this cycle (0 alerts sent).[/yellow bold]")
             logger.info("No qualifying articles found to send to Telegram (alerted=0).")
         else:
-            console.print(f"[green bold]✓ Successfully dispatched {summary.alerted} alert(s) to Telegram![/green bold]")
-            logger.info("Successfully dispatched %d alert(s) to Telegram.", summary.alerted)
+            if isinstance(pipeline.notifier, TelegramNotifier):
+                console.print(f"[green bold]✓ Successfully dispatched {summary.alerted} alert(s) to Telegram![/green bold]")
+                logger.info("Successfully dispatched %d alert(s) to Telegram.", summary.alerted)
+            else:
+                console.print(f"[cyan bold]✓ Processed {summary.alerted} alert(s) to console (Local mode).[/cyan bold]")
+                logger.info("Processed %d alert(s) via ConsoleNotifier.", summary.alerted)
 
         render_actionable_investment_bottom_line(console, summary, pipeline.storage)
 

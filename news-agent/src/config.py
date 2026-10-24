@@ -6,11 +6,32 @@ import yaml
 from pydantic import BaseModel, Field, field_validator
 from src.models import ImpactGrade, WatchlistSettings
 
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
+def _load_env_files() -> None:
+    """Robustly discover and load environment variables from .env.local and .env
+    across the current working directory, news-agent directory, and repository root.
+    """
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+
+    search_dirs = [
+        Path.cwd(),
+        Path.cwd() / "news-agent",
+        Path(__file__).resolve().parent.parent,  # news-agent root
+        Path(__file__).resolve().parent.parent.parent,  # workspace / repository root
+    ]
+
+    seen = set()
+    for d in search_dirs:
+        for fname in [".env.local", ".env"]:
+            p = (d / fname).resolve()
+            if p.is_file() and p not in seen:
+                seen.add(p)
+                load_dotenv(p, override=False)
+
+
+_load_env_files()
 
 
 class SourceConfig(BaseModel):
@@ -187,6 +208,7 @@ def _find_default_config_path(filename: str) -> Path:
 
 def load_settings(config_path: Optional[str] = None) -> Settings:
     """Loads and validates application settings from YAML with env var substitution."""
+    _load_env_files()
     path = Path(config_path) if config_path else _find_default_config_path("settings.yaml")
     if not path.exists():
         return Settings()
@@ -195,7 +217,17 @@ def load_settings(config_path: Optional[str] = None) -> Settings:
         raw_data = yaml.safe_load(f) or {}
 
     processed_data = _expand_env_vars(raw_data)
-    return Settings.model_validate(processed_data)
+    settings = Settings.model_validate(processed_data)
+
+    # Normalize relative database_path to news-agent root if news-agent/data exists
+    if settings.agent and settings.agent.database_path:
+        db_p = Path(settings.agent.database_path)
+        if not db_p.is_absolute():
+            news_agent_db = Path(__file__).resolve().parent.parent / db_p
+            if news_agent_db.exists() or (not db_p.exists() and news_agent_db.parent.exists()):
+                settings.agent.database_path = str(news_agent_db)
+
+    return settings
 
 
 def load_sources(sources_path: Optional[str] = None) -> List[SourceConfig]:
