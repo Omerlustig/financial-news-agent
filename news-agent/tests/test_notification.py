@@ -485,6 +485,30 @@ def test_telegram_message_formatting_institutional_causal_chain():
     assert "<i>⚠️ News-derived hypothesis. Market pricing, valuation, and entry points were not checked.</i>" in msg
 
 
+def test_telegram_message_includes_behind_the_lines_subtext():
+    """Verify that decoded subtext / reading between the lines is included in Telegram alert."""
+    article = RawArticle(
+        title="Volkswagen plans global salary freeze through 2030 - report",
+        url="https://seekingalpha.com/news/vw-salary-freeze",
+        source_name="Seeking Alpha",
+    )
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=8,
+        impact_grade=ImpactGrade.HIGH,
+        affected_tickers=["$VWAGY", "$TSLA"],
+        affected_sectors=["Automotive", "Electric Vehicles"],
+        summary="Volkswagen plans unprecedented global salary freeze through 2030 across European operations.",
+        catalyst_thesis="Structural European cost crisis and declining China market share force fixed-cost cuts.",
+        subtext_analysis="Management is testing union resolve ahead of collective bargaining, pre-empting acute cash-flow bleed and unannounced factory closures.",
+        directional_stance=DirectionalStance.BEARISH,
+        status=EventStatus.OPPORTUNITY_CANDIDATE,
+    )
+    msg = format_telegram_message(article, analysis)
+    assert "Behind the Lines (Subtext):" in msg
+    assert "Management is testing union resolve ahead of collective bargaining" in msg
+
+
 def test_telegram_message_formatting_with_explicit_recommendation():
     article = RawArticle(
         title="Check Point Software Acquires Cyber Leader",
@@ -888,6 +912,132 @@ def test_format_telegram_message_institutional_two_layer_gate_and_4d_sentiment()
     assert "⚔️ <b>ADVERSARIAL CHALLENGER & RISK DEFENSE:</b>" in msg
     assert "• <b>Contrarian Counter-Thesis:</b> Thermal management and liquid cooling yields could constrain volume ramp." in msg
     assert "• <b>Invalidation Threshold:</b> Quarterly datacenter revenue growth falls below 15% sequentially." in msg
+
+
+def test_format_batch_telegram_message_single():
+    from src.notification.telegram import format_batch_telegram_message
+    from src.models import CausalChain
+
+    art = RawArticle(
+        title="US Conducts Airstrikes in Iran; Oil Shipping Chokepoints at Risk",
+        url="https://reuters.com/world/middle-east/iran-strikes",
+        source_name="Reuters",
+    )
+    ana = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=8,
+        impact_grade=ImpactGrade.HIGH,
+        affected_tickers=["$XOM", "$CVX"],
+        affected_sectors=["Energy", "Oil & Gas"],
+        summary="US strikes military targets in Iran; Strait of Hormuz tanker routes threatened.",
+        catalyst_thesis="Crude supply disruption elevates spot oil prices.",
+        subtext_analysis="Escalation risk premium pricing in; upstream E&P spot margins expand immediately while passenger airlines face acute jet fuel inflation.",
+        directional_stance=DirectionalStance.BULLISH,
+        status=EventStatus.OPPORTUNITY_CANDIDATE,
+        causal_chain=CausalChain(
+            event_facts="US airstrikes conducted.",
+            economic_mechanism="Crude price surge expands upstream E&P margins.",
+            affected_sectors=["Energy", "Airlines"],
+            beneficiaries=["$XOM", "$CVX", "$XLE"],
+            negatively_exposed=["$DAL", "$UAL", "$JETS"],
+            counterarguments="Rapid diplomatic de-escalation.",
+            invalidation_conditions="Crude drops below $75/bbl or shipping guarantees restored.",
+        ),
+    )
+
+    msg = format_batch_telegram_message([(art, ana)])
+    assert "🚨 <b>MARKET OPPORTUNITY (Score: 8/10)</b>" in msg
+    assert "Score: 8/10 (HIGH)" in msg
+    assert "$XOM, $CVX, $XLE" in msg
+    assert "• <b>Catalyst:</b>" in msg
+    assert "• <b>Behind The Lines:</b> Escalation risk premium pricing in" in msg
+    assert "• <b>Action:</b> 🟢 <b>Favor:</b> $XOM, $CVX, $XLE | 🔴 <b>Avoid/Hedge:</b> $DAL, $UAL, $JETS" in msg
+    assert "• <b>Risk / Invalidation:</b> Crude drops below $75/bbl" in msg
+    assert '<a href="https://reuters.com/world/middle-east/iran-strikes">Reuters</a>' in msg
+
+
+def test_format_batch_telegram_message_multiple():
+    from src.notification.telegram import format_batch_telegram_message
+    from src.models import CausalChain
+
+    art1 = RawArticle(
+        title="US Conducts Airstrikes in Iran",
+        url="https://reuters.com/iran-strikes",
+        source_name="Reuters",
+    )
+    ana1 = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=8,
+        impact_grade=ImpactGrade.HIGH,
+        affected_tickers=["$XOM", "$CVX"],
+        affected_sectors=["Energy"],
+        summary="Airstrikes threaten Persian Gulf oil flows.",
+        catalyst_thesis="Crude supply disruption elevates spot oil prices.",
+        subtext_analysis="Upstream margins expand immediately while airlines face jet fuel spikes.",
+        causal_chain=CausalChain(
+            event_facts="Airstrikes conducted.",
+            economic_mechanism="Oil spike.",
+            affected_sectors=["Energy"],
+            beneficiaries=["$XOM", "$CVX"],
+            negatively_exposed=["$DAL"],
+            invalidation_conditions="Crude below $75/bbl.",
+        ),
+    )
+
+    art2 = RawArticle(
+        title="Volkswagen plans global salary freeze through 2030 - report",
+        url="https://seekingalpha.com/vw-freeze",
+        source_name="Seeking Alpha",
+    )
+    ana2 = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=7,
+        impact_grade=ImpactGrade.HIGH,
+        affected_tickers=["$TSLA"],
+        affected_sectors=["Automotive"],
+        summary="Volkswagen plans unprecedented global wage freeze.",
+        catalyst_thesis="Structural cost reduction.",
+        subtext_analysis="Management is testing union resolve to avert plant closures.",
+        directional_stance=DirectionalStance.BEARISH,
+        causal_chain=CausalChain(
+            event_facts="Salary freeze through 2030.",
+            economic_mechanism="Fixed-cost reduction under Chinese EV pressure.",
+            affected_sectors=["Automotive"],
+            beneficiaries=["$TSLA"],
+            negatively_exposed=["$VWAGY"],
+            invalidation_conditions="Margin recovery above 8%.",
+        ),
+    )
+
+    msg = format_batch_telegram_message([(art1, ana1), (art2, ana2)])
+    assert "🚨 <b>MARKET OPPORTUNITIES (2 In Focus)</b>" in msg
+    assert "━━━━━━━━━━━━━━━━━━━━━━━━━━" in msg
+    assert "1. $XOM, $CVX | 🟢 Energy | Score: 8/10 (HIGH)" in msg
+    assert "2. $TSLA | 🔴 Automotive | Score: 7/10 (HIGH)" in msg
+    assert "• <b>Behind The Lines:</b>" in msg
+    assert "Seeking Alpha" in msg
+    assert "Reuters" in msg
+
+
+def test_telegram_send_batch_alerts_dispatches_single_push():
+    from unittest.mock import MagicMock
+    from src.notification.telegram import TelegramNotifier
+
+    notifier = TelegramNotifier(bot_token="123:ABC", chat_id="456")
+    notifier.send_message = MagicMock(return_value=True)
+
+    art1 = RawArticle(title="Art 1", url="https://a.com", source_name="Source A")
+    ana1 = MarketImpactAnalysis(is_market_moving=True, confidence_score=8, impact_grade=ImpactGrade.HIGH, summary="Sum 1", catalyst_thesis="Thesis 1")
+    art2 = RawArticle(title="Art 2", url="https://b.com", source_name="Source B")
+    ana2 = MarketImpactAnalysis(is_market_moving=True, confidence_score=7, impact_grade=ImpactGrade.HIGH, summary="Sum 2", catalyst_thesis="Thesis 2")
+
+    ok = notifier.send_batch_alerts([(art1, ana1), (art2, ana2)])
+    assert ok is True
+    # Exactly ONE call to send_message!
+    assert notifier.send_message.call_count == 1
+    sent_text = notifier.send_message.call_args[0][0]
+    assert "MARKET OPPORTUNITIES (2 In Focus)" in sent_text
+
 
 
 

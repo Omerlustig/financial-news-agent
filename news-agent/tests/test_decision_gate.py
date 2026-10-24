@@ -246,14 +246,14 @@ def test_evaluate_event_quality_corroboration_and_novelty_matrix():
     )
     assert score2 == 9.5
 
-    # 3+ sources (+2.0), Commercial News (6.5), Priced in (-3.0) -> 6.5 + 2.0 - 3.0 = 5.5
+    # 3+ sources (+2.0), Commercial News (8.0 equal footing), Priced in (-3.0) -> 8.0 + 2.0 - 3.0 = 7.0
     score3 = engine.evaluate_event_quality(
         dummy_analysis,
         provenance=ProvenanceLevel.COMMERCIAL_NEWS,
         corroboration_count=4,
         novelty_state=NoveltyState.PRICED_IN_OR_RECYCLED,
     )
-    assert score3 == 5.5
+    assert score3 == 7.0
 
     # Verification audit: is_verified=False caps score at 5.0
     score_unverified = engine.evaluate_event_quality(
@@ -305,3 +305,75 @@ def test_evaluate_opportunity_score_components():
     opp_b = engine.evaluate_opportunity_score(analysis_b, technical_confluence_boost=0.0)
     # cash_flow = 0.6 * 3.5 = 2.1, surprise = 0.5 -> 2.6
     assert 2.5 <= opp_b <= 3.0
+
+
+def test_geopolitical_shock_commercial_news_passes_alert():
+    """
+    Test geopolitical macro catalyst breaking on Commercial News (e.g. Seeking Alpha / CNBC):
+    Event: Military action / geopolitical strike drives crude energy prices up.
+    Analysis identifies clear transmission mechanism, sector beneficiaries ($XOM, $CVX, $XLE),
+    and exposed targets ($DAL, $UAL).
+    Equal footing provenance (8.0) + genuine surprise (+0.5) ensures event quality gate passes (8.5 >= 8.0).
+    Robust thesis (+2.0) and strong fundamental cash flow expansion yields opportunity score >= 8.0 -> ALERT!
+    """
+    engine = TwoLayerGateEngine()
+
+    from src.models import CausalChain
+
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=8,
+        impact_grade=ImpactGrade.HIGH,
+        affected_tickers=["$XOM", "$CVX"],
+        affected_sectors=["Energy", "Oil & Gas", "Commercial Airlines"],
+        summary="US strikes military targets in Iran; Strait of Hormuz oil shipments threatened.",
+        catalyst_thesis="Crude supply disruption elevates Brent spot prices, dramatically expanding upstream E&P operating cash flow.",
+        directional_stance=DirectionalStance.BULLISH,
+        status=EventStatus.OPPORTUNITY_CANDIDATE,
+        provenance_level=ProvenanceLevel.COMMERCIAL_NEWS,
+        novelty_state=NoveltyState.GENUINE_SURPRISE,
+        corroboration_count=1,
+        causal_chain=CausalChain(
+            event_facts="US airstrikes conducted against military facilities in Iran.",
+            economic_mechanism="Geopolitical disruption risks Persian Gulf tanker flows, spiking global crude prices and widening upstream refining crack spreads.",
+            affected_sectors=["Energy", "Airlines"],
+            beneficiaries=["$XOM", "$CVX", "$XLE"],
+            negatively_exposed=["$DAL", "$UAL", "$JETS"],
+            counterarguments="Rapid diplomatic de-escalation or immediate SPR reserve releases.",
+            invalidation_conditions="Crude prices drop below $75/bbl or shipping security guarantees restored.",
+        ),
+        four_d_sentiment=FourDimensionalSentiment(
+            linguistic_sentiment=0.7,
+            fundamental_impact=0.85,    # 0.85 * 3.5 = 2.975
+            expectation_surprise=0.8,   # 0.8 * 2.5 = 2.0
+            price_implication=0.85,
+            surprise_verdict="UNEXPECTED_SHOCK",
+        ),
+        adversarial_review=AdversarialReview(
+            bearish_counter_thesis="OPEC spare capacity may quickly offset localized disruption.",
+            priced_in_risk="Geopolitical risk premium was partially elevated over prior 48 hours.",
+            macro_confounding_risk="Broad market selloff could temporarily compress beta multiples.",
+            falsification_threshold="Prompt de-escalation with Brent reversing gains within 24 hours.",
+            is_thesis_robust=True,      # +2.0
+        ),
+        hard_gates=HardGates(
+            is_novel=True,
+            is_verified=True,
+            has_direct_exposure=True,
+            passes_all_gates=True,
+        ),
+        is_watchlist_match=False,
+    )
+
+    decision = engine.evaluate_gates(analysis, min_opportunity_score=7.0, technical_confluence_boost=1.0)
+
+    # Event quality: COMMERCIAL_NEWS baseline (8.0) + GENUINE_SURPRISE (+0.5) = 8.5 >= 8.0
+    assert decision.event_quality_score == 8.5
+    assert decision.passes_event_quality_gate is True
+
+    # Opportunity: 2.975 (cash flow) + 2.0 (surprise) + 2.0 (robust) + 1.0 (tech) = 7.975 -> 7.98 (or >= 7.5)
+    assert decision.opportunity_score >= 7.5
+    assert decision.passes_opportunity_gate is True
+    assert decision.gate_verdict == "ALERT"
+    assert decision.rejection_reason is None
+

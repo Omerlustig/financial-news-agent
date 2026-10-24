@@ -24,11 +24,12 @@ logger = logging.getLogger("decision_gate")
 class TwoLayerGateEngine:
     """Evaluates Layer 1 Event Quality and Layer 2 Opportunity scores, applying institutional gates."""
 
-    # Baseline Provenance Scoring
+    # Baseline Provenance Scoring: All configured, legitimate news feeds start on equal footing (8.0).
+    # Origin publisher tier does not penalize or restrict analysis. Only unverified blogs/rumors start low (4.0).
     PROVENANCE_SCORES = {
         ProvenanceLevel.PRIMARY_OFFICIAL: 9.0,
         ProvenanceLevel.TIER1_FINANCIAL: 8.0,
-        ProvenanceLevel.COMMERCIAL_NEWS: 6.5,
+        ProvenanceLevel.COMMERCIAL_NEWS: 8.0,
         ProvenanceLevel.UNVERIFIED_BLOG: 4.0,
     }
 
@@ -67,7 +68,7 @@ class TwoLayerGateEngine:
             except ValueError:
                 resolved_prov = ProvenanceLevel.COMMERCIAL_NEWS
 
-        baseline = self.PROVENANCE_SCORES.get(resolved_prov, 6.5)
+        baseline = self.PROVENANCE_SCORES.get(resolved_prov, 8.0)
 
         # Resolve Corroboration
         effective_corroboration = max(

@@ -13,9 +13,15 @@ from src.models import (
     EventLineageRecord,
     ProvenanceLevel,
     NoveltyState,
+    DirectionalStance,
+    TimeHorizon,
+    CausalChain,
+    HardGates,
+    SurgeLevel,
 )
 from src.config import Settings, SourceConfig, WatchlistSettings, load_settings, load_sources
 from src.ingestion.rss import fetch_all_sources
+from src.ingestion.extractor import ArticleBodyExtractor
 from src.storage.base import BaseStorage
 from src.storage.sqlite import SQLiteStorage
 from src.analysis.analyzer import MarketImpactAnalyzer
@@ -105,11 +111,22 @@ class Pipeline:
         batch_size_per_source: Optional[int] = None,
         max_article_age_minutes: Optional[int] = None,
         enable_fact_verification: Optional[bool] = None,
+        extract_full_body: Optional[bool] = None,
+        batch_notifications: Optional[bool] = None,
+        enable_batch_triage: Optional[bool] = None,
     ) -> None:
         self.settings = settings
         self.force = force
         self.fetch_timeout = fetch_timeout
         self.fetcher = fetcher
+
+        # Batch triage screening toggle (low-token batch screening for catalyst candidates)
+        if enable_batch_triage is not None:
+            self.enable_batch_triage = bool(enable_batch_triage)
+        elif settings is not None and getattr(settings, "filter", None) is not None and hasattr(settings.filter, "enable_batch_triage"):
+            self.enable_batch_triage = bool(settings.filter.enable_batch_triage)
+        else:
+            self.enable_batch_triage = True
 
         # Fact verification toggle (disabled per user request)
         if enable_fact_verification is not None:
@@ -226,6 +243,16 @@ class Pipeline:
         else:
             self.notifier = ConsoleNotifier()
 
+        # Batch notifications configuration (combine multiple opportunities from same cycle into 1 push)
+        if batch_notifications is not None:
+            self.batch_notifications = bool(batch_notifications)
+        elif settings is not None and getattr(settings, "telegram", None) is not None and hasattr(settings.telegram, "batch_notifications"):
+            self.batch_notifications = bool(settings.telegram.batch_notifications)
+        elif isinstance(self.notifier, TelegramNotifier):
+            self.batch_notifications = True
+        else:
+            self.batch_notifications = False
+
         # Technical Analysis subsystem (TradingView confluence)
         self.technical_engine = technical_engine if technical_engine is not None else TradingViewEngine()
 
@@ -235,6 +262,15 @@ class Pipeline:
         )
         self.novelty_engine = novelty_engine if novelty_engine is not None else NoveltyEngine()
         self.gate_engine = gate_engine if gate_engine is not None else TwoLayerGateEngine()
+
+        # Full-text body extraction engine for deep catalyst comprehension
+        if extract_full_body is not None:
+            self.extract_full_body = bool(extract_full_body)
+        elif settings is not None and getattr(settings, "agent", None) is not None:
+            self.extract_full_body = getattr(settings.agent, "extract_full_body", True)
+        else:
+            self.extract_full_body = True
+        self.body_extractor = ArticleBodyExtractor()
 
 
     @classmethod
@@ -397,13 +433,149 @@ class Pipeline:
         alerted_count = 0
         errors_count = 0
         top_catalysts: List[Tuple[RawArticle, MarketImpactAnalysis]] = []
+        warranted_alerts: List[Tuple[RawArticle, MarketImpactAnalysis]] = []
 
         # 3. Multi-Source Event Clustering
         clusters = self.corroborator.cluster_articles(unseen_articles)
 
+        # Batch triage screener: pre-screen multiple clusters with 1 low-token call
+        candidate_cluster_indices = set(range(len(clusters)))
+        if (
+            getattr(self, "enable_batch_triage", True)
+            and not self.alert_on_all
+            and len(clusters) > 2
+            and hasattr(self.analyzer, "screen_catalyst_candidates")
+            and callable(self.analyzer.screen_catalyst_candidates)
+        ):
+            try:
+                canonical_list = [c.canonical_article for c in clusters]
+                wl_tickers = (
+                    getattr(self.watchlist, "tickers", None)
+                    if self.watchlist and getattr(self.watchlist, "enabled", True)
+                    else None
+                )
+                wl_sectors = (
+                    getattr(self.watchlist, "sectors", None)
+                    if self.watchlist and getattr(self.watchlist, "enabled", True)
+                    else None
+                )
+                candidate_cluster_indices = set(
+                    self.analyzer.screen_catalyst_candidates(
+                        canonical_list,
+                        watchlist_tickers=wl_tickers,
+                        watchlist_sectors=wl_sectors,
+                    )
+                )
+                logger.info(
+                    "Batch triage screener selected %d/%d clusters for deep LLM analysis (filtered %d routine headlines).",
+                    len(candidate_cluster_indices),
+                    len(clusters),
+                    len(clusters) - len(candidate_cluster_indices),
+                )
+            except Exception as triage_err:
+                logger.warning(
+                    "Batch triage screener encountered error; falling back to analyzing all clusters: %s",
+                    triage_err,
+                )
+                candidate_cluster_indices = set(range(len(clusters)))
+
         # 4. Iterate through candidate event clusters
-        for cluster in clusters:
+        for cluster_idx, cluster in enumerate(clusters):
             canonical = cluster.canonical_article
+
+            # Upfront noise filtering: detect and suppress zero-value syndicated noise releases before LLM
+            if not self.alert_on_all and self.corroborator.is_noise_article(canonical):
+                logger.info(
+                    "Article '%s' identified upfront as syndicated noise release; skipping LLM analysis.",
+                    canonical.title,
+                )
+                noise_analysis = MarketImpactAnalysis(
+                    is_llm_analyzed=True,
+                    is_market_moving=False,
+                    confidence_score=1,
+                    impact_grade=ImpactGrade.LOW,
+                    affected_tickers=[],
+                    affected_sectors=[],
+                    summary=canonical.title[:200] if canonical.title else "Syndicated noise release",
+                    catalyst_thesis="Syndicated noise release / zero-value PR; suppressed before LLM invocation.",
+                    status=EventStatus.NO_ACTION,
+                    directional_stance=DirectionalStance.NEUTRAL,
+                    time_horizon=TimeHorizon.INTRADAY.value,
+                    causal_chain=CausalChain(
+                        event_facts=canonical.title[:200] if canonical.title else "Syndicated noise release",
+                        economic_mechanism="Zero material economic transmission.",
+                        affected_sectors=[],
+                        beneficiaries=[],
+                        negatively_exposed=[],
+                        counterarguments="Syndicated commercial noise.",
+                        invalidation_conditions="Official SEC filing or tier 1 breaking news.",
+                    ),
+                    hard_gates=HardGates(
+                        is_novel=False,
+                        is_verified=False,
+                        has_direct_exposure=False,
+                        passes_all_gates=False,
+                    ),
+                    recommendation="No action warranted on syndicated noise release.",
+                    corroborating_sources=[canonical.source_name] if canonical.source_name else [],
+                    corroboration_count=len(cluster.articles),
+                    surge_level=SurgeLevel.NORMAL,
+                )
+                try:
+                    self.storage.record_article(canonical, noise_analysis, alerted=False)
+                    for secondary in cluster.articles:
+                        if secondary.content_hash != canonical.content_hash:
+                            self.storage.record_article(secondary, noise_analysis, alerted=False)
+                except Exception as exc:
+                    logger.error("Error recording noise article to storage: %s", exc)
+                continue
+
+            # Batch triage filtering: skip clusters that did not qualify as catalyst candidates
+            if cluster_idx not in candidate_cluster_indices:
+                logger.info(
+                    "Cluster '%s' filtered out during low-token batch triage; skipping deep LLM analysis.",
+                    canonical.title,
+                )
+                triage_analysis = MarketImpactAnalysis(
+                    is_llm_analyzed=True,
+                    is_market_moving=False,
+                    confidence_score=3,
+                    impact_grade=ImpactGrade.LOW,
+                    affected_tickers=[],
+                    affected_sectors=[],
+                    summary=canonical.title[:200] if canonical.title else "Routine market news",
+                    catalyst_thesis="Routine market news filtered during low-token batch triage screening.",
+                    status=EventStatus.INFORMATIONAL,
+                    directional_stance=DirectionalStance.NEUTRAL,
+                    time_horizon=TimeHorizon.INTRADAY.value,
+                    causal_chain=CausalChain(
+                        event_facts=canonical.title[:200] if canonical.title else "Routine news",
+                        economic_mechanism="No direct catalytic impact identified during batch triage.",
+                        affected_sectors=[],
+                        beneficiaries=[],
+                        negatively_exposed=[],
+                        counterarguments="Routine market news.",
+                        invalidation_conditions="Material update or regulatory disclosure.",
+                    ),
+                    hard_gates=HardGates(
+                        is_novel=False,
+                        is_verified=True,
+                        has_direct_exposure=False,
+                        passes_all_gates=False,
+                    ),
+                    recommendation="Maintain observational stance. Routine news filtered during batch triage.",
+                    corroborating_sources=[canonical.source_name] if canonical.source_name else [],
+                    corroboration_count=len(cluster.articles),
+                    surge_level=SurgeLevel.NORMAL,
+                )
+                try:
+                    self.storage.record_article(canonical, triage_analysis, alerted=False)
+                    for secondary in cluster.articles:
+                        if secondary.content_hash != canonical.content_hash:
+                            self.storage.record_article(secondary, triage_analysis, alerted=False)
+                except Exception as exc:
+                    logger.error("Error recording filtered triage article to storage: %s", exc)
+                continue
 
             # Lineage search: extract informative title tokens and primary ticker candidate
             title_tokens = [w.lower() for w in re.findall(r"\b[A-Za-z]{3,}\b", canonical.title)]
@@ -430,6 +602,17 @@ class Pipeline:
             )
             if not self.enable_fact_verification:
                 is_verified = True
+
+            # Deep Comprehension: Enrich canonical article with full text if missing or brief snippet
+            if getattr(self, "extract_full_body", True) and canonical.url:
+                if not canonical.content or len(canonical.content.strip()) < 250:
+                    try:
+                        extracted_body = self.body_extractor.extract_full_text(canonical.url, timeout=5.0)
+                        if extracted_body and len(extracted_body.strip()) > len(canonical.content or ""):
+                            canonical.content = extracted_body
+                            logger.debug("Successfully enriched canonical article '%s' with full body (%d chars)", canonical.title, len(extracted_body))
+                    except Exception as ext_err:
+                        logger.debug("On-demand body extraction skipped for %s: %s", canonical.url, ext_err)
 
             try:
                 analysis = self.analyzer.analyze(canonical)
@@ -690,19 +873,22 @@ class Pipeline:
             alert_delivered = False
 
             if alert_warranted:
-                try:
-                    alert_delivered = bool(self.notifier.send_alert(canonical, analysis))
-                except Exception as exc:
-                    logger.error(
-                        "Error dispatching notification for article '%s': %s",
-                        canonical.title,
-                        exc,
-                        exc_info=True,
-                    )
-                    alert_delivered = False
+                if getattr(self, "batch_notifications", False):
+                    warranted_alerts.append((canonical, analysis))
+                else:
+                    try:
+                        alert_delivered = bool(self.notifier.send_alert(canonical, analysis))
+                    except Exception as exc:
+                        logger.error(
+                            "Error dispatching notification for article '%s': %s",
+                            canonical.title,
+                            exc,
+                            exc_info=True,
+                        )
+                        alert_delivered = False
 
-                if alert_delivered:
-                    alerted_count += 1
+                    if alert_delivered:
+                        alerted_count += 1
             else:
                 logger.info(
                     "Article '%s' (%s) routed to storage without alert (status=%s, score=%d, alerted=False).",
@@ -757,6 +943,31 @@ class Pipeline:
                             exc,
                             exc_info=True,
                         )
+
+        # 5. Batch dispatching: combine qualified opportunities from this cycle into 1 unified push
+        if getattr(self, "batch_notifications", False) and warranted_alerts:
+            batch_success = False
+            if len(warranted_alerts) > 1 and hasattr(self.notifier, "send_batch_alerts") and callable(self.notifier.send_batch_alerts):
+                try:
+                    batch_success = bool(self.notifier.send_batch_alerts(warranted_alerts))
+                except Exception as exc:
+                    logger.error("Error dispatching batch notification: %s", exc, exc_info=True)
+                    batch_success = False
+            else:
+                art, ana = warranted_alerts[0]
+                try:
+                    batch_success = bool(self.notifier.send_alert(art, ana))
+                except Exception as exc:
+                    logger.error("Error dispatching notification for '%s': %s", art.title, exc, exc_info=True)
+                    batch_success = False
+
+            if batch_success:
+                alerted_count = len(warranted_alerts)
+                for art, ana in warranted_alerts:
+                    try:
+                        self.storage.record_article(art, ana, alerted=True)
+                    except Exception as exc:
+                        logger.error("Error updating alerted status for '%s': %s", art.title, exc)
 
         return CycleSummary(
             fetched=fetched_count,

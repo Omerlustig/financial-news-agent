@@ -2,7 +2,7 @@ import html
 import logging
 import re
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
@@ -496,6 +496,8 @@ def format_telegram_message(
     lines.append("")
     lines.append("📖 <b>THE CATALYST:</b>")
     lines.append(f"• <b>Event:</b> {escape_html(summary_text)}")
+    if getattr(analysis, "subtext_analysis", None):
+        lines.append(f"• 🔍 <b>Behind the Lines (Subtext):</b> {escape_html(analysis.subtext_analysis)}")
     if mechanism and mechanism != "None" and mechanism != summary_text:
         lines.append(f"• <b>Why it matters:</b> {escape_html(mechanism)}")
 
@@ -549,6 +551,141 @@ def format_telegram_message(
 
     formatted = "\n".join(lines)
     return safe_truncate_html(formatted, max_length=MAX_TELEGRAM_MESSAGE_LENGTH)
+
+
+def format_clean_opportunity_item(
+    article: RawArticle,
+    analysis: MarketImpactAnalysis,
+    index: Optional[int] = None,
+) -> str:
+    """Formats a single investment opportunity into a clean, focused, zero-noise summary block."""
+    score = analysis.confidence_score if analysis.confidence_score is not None else 0
+    grade = (
+        getattr(analysis.impact_grade, "value", str(analysis.impact_grade)).upper()
+        if analysis.impact_grade
+        else "HIGH"
+    )
+
+    # Directional icon & stance
+    stance = getattr(analysis, "directional_stance", None)
+    stance_val = getattr(stance, "value", str(stance)).strip().upper() if stance else "NEUTRAL"
+    if any(w in stance_val for w in ["BEAR", "DOWN", "NEG", "SHORT"]):
+        stance_icon = "🔴"
+    elif any(w in stance_val for w in ["VOLATILE"]):
+        stance_icon = "⚡"
+    else:
+        stance_icon = "🟢"
+
+    # Tickers & Sectors
+    sectors_list: List[str] = []
+    if analysis.causal_chain and analysis.causal_chain.affected_sectors:
+        sectors_list = analysis.causal_chain.affected_sectors
+    elif analysis.affected_sectors:
+        sectors_list = analysis.affected_sectors
+    sectors_str = ", ".join(sectors_list) if sectors_list else "Equities"
+
+    beneficiaries: List[str] = []
+    negatively_exposed: List[str] = []
+    if analysis.causal_chain:
+        beneficiaries = [b for b in (analysis.causal_chain.beneficiaries or []) if b and b != "None"]
+        negatively_exposed = [e for e in (analysis.causal_chain.negatively_exposed or []) if e and e != "None"]
+    if not beneficiaries and not negatively_exposed:
+        if "BEAR" in stance_val:
+            negatively_exposed = analysis.affected_tickers or []
+        else:
+            beneficiaries = analysis.affected_tickers or []
+
+    primary_tickers = ", ".join(beneficiaries if beneficiaries else (negatively_exposed if negatively_exposed else (analysis.affected_tickers or [])))
+    if not primary_tickers:
+        primary_tickers = sectors_str
+
+    prefix = f"{index}. " if index is not None else ""
+    header = f"<b>{prefix}{escape_html(primary_tickers)} | {stance_icon} {escape_html(sectors_str)} | Score: {score}/10 ({escape_html(grade)})</b>"
+
+    # Event facts (short catalyst)
+    catalyst_text = analysis.summary
+    if not catalyst_text and analysis.causal_chain and analysis.causal_chain.event_facts:
+        catalyst_text = analysis.causal_chain.event_facts
+    if not catalyst_text:
+        catalyst_text = article.title
+    catalyst_text = catalyst_text.strip()
+    if len(catalyst_text) > 180:
+        catalyst_text = catalyst_text[:177] + "..."
+
+    lines = [header]
+    lines.append(f"• <b>Catalyst:</b> {escape_html(catalyst_text)}")
+
+    # Behind the lines (subtext)
+    subtext = getattr(analysis, "subtext_analysis", None)
+    if not subtext and analysis.causal_chain and analysis.causal_chain.economic_mechanism:
+        subtext = analysis.causal_chain.economic_mechanism
+    elif not subtext and analysis.catalyst_thesis:
+        subtext = analysis.catalyst_thesis
+    if subtext:
+        subtext = subtext.strip()
+        if len(subtext) > 220:
+            subtext = subtext[:217] + "..."
+        lines.append(f"• <b>Behind The Lines:</b> {escape_html(subtext)}")
+
+    # Actionable positioning (Favor vs Avoid/Hedge)
+    action_parts: List[str] = []
+    if beneficiaries:
+        action_parts.append(f"🟢 <b>Favor:</b> {', '.join(beneficiaries)}")
+    if negatively_exposed:
+        action_parts.append(f"🔴 <b>Avoid/Hedge:</b> {', '.join(negatively_exposed)}")
+    if action_parts:
+        lines.append(f"• <b>Action:</b> {' | '.join(action_parts)}")
+    elif getattr(analysis, "recommendation", None):
+        rec = str(analysis.recommendation).strip()
+        if len(rec) > 150:
+            rec = rec[:147] + "..."
+        lines.append(f"• <b>Action:</b> {escape_html(rec)}")
+
+    # Risk & Invalidation
+    invalidation = None
+    if analysis.causal_chain and analysis.causal_chain.invalidation_conditions and analysis.causal_chain.invalidation_conditions != "None":
+        invalidation = analysis.causal_chain.invalidation_conditions
+    elif getattr(analysis, "adversarial_review", None) and analysis.adversarial_review.falsification_threshold:
+        invalidation = analysis.adversarial_review.falsification_threshold
+    elif analysis.causal_chain and analysis.causal_chain.counterarguments and analysis.causal_chain.counterarguments != "None":
+        invalidation = analysis.causal_chain.counterarguments
+
+    if invalidation:
+        invalidation = str(invalidation).strip()
+        if len(invalidation) > 180:
+            invalidation = invalidation[:177] + "..."
+        lines.append(f"• <b>Risk / Invalidation:</b> {escape_html(invalidation)}")
+
+    # Source Link
+    source_name = article.source_name or "Source"
+    if article.url:
+        lines.append(f"🔗 <a href=\"{article.url}\">{escape_html(source_name)}</a>")
+    else:
+        lines.append(f"📰 {escape_html(source_name)}")
+
+    return "\n".join(lines)
+
+
+def format_batch_telegram_message(items: List[Tuple[RawArticle, MarketImpactAnalysis]]) -> str:
+    """Combines 1 or more investment recommendations into a single, clean, focused Telegram push."""
+    if not items:
+        return ""
+
+    if len(items) == 1:
+        art, ana = items[0]
+        score = ana.confidence_score if ana.confidence_score is not None else 0
+        header = f"🚨 <b>MARKET OPPORTUNITY (Score: {score}/10)</b>\n"
+        body = format_clean_opportunity_item(art, ana, index=None)
+        return safe_truncate_html(f"{header}\n{body}")
+
+    header = f"🚨 <b>MARKET OPPORTUNITIES ({len(items)} In Focus)</b>\n"
+    item_blocks = []
+    for idx, (art, ana) in enumerate(items, 1):
+        item_blocks.append(format_clean_opportunity_item(art, ana, index=idx))
+
+    separator = "\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    content = header + "\n" + separator.join(item_blocks)
+    return safe_truncate_html(content)
 
 
 class TelegramNotifier(BaseNotifier):
@@ -643,6 +780,17 @@ class TelegramNotifier(BaseNotifier):
             return self.send_message(message, reply_markup=reply_markup)
         except Exception as exc:
             logger.error("Failed to construct or dispatch Telegram alert: %s", self._redact_token(exc))
+            return False
+
+    def send_batch_alerts(self, items: List[Tuple[RawArticle, MarketImpactAnalysis]]) -> bool:
+        """Format and dispatch multiple recommendations in a single unified Telegram push."""
+        if not items:
+            return False
+        try:
+            message = format_batch_telegram_message(items)
+            return self.send_message(message)
+        except Exception as exc:
+            logger.error("Failed to construct or dispatch batch Telegram alert: %s", self._redact_token(exc))
             return False
 
     def send_message(self, text: str, reply_markup: Optional[Dict[str, Any]] = None) -> bool:

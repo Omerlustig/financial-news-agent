@@ -35,6 +35,7 @@ class AgentSettings(BaseModel):
     max_article_age_minutes: Optional[int] = Field(default=15, description="Maximum age of articles in minutes to process (None or 0 to disable).")
     database_path: str = Field(default="data/agent.db", description="Path to SQLite database.")
     enable_etag_cache: bool = Field(default=True, description="Enable HTTP conditional GET caching for feeds.")
+    extract_full_body: bool = Field(default=True, description="Fetch full article text for deep comprehension instead of RSS snippet only.")
     fetch_max_retries: int = Field(default=3, description="Maximum retry attempts on feed network failures.")
     fetch_retry_backoff: float = Field(default=1.0, description="Exponential backoff factor in seconds for feed fetch retries.")
 
@@ -44,6 +45,7 @@ class FilterSettings(BaseModel):
     min_impact_grade: ImpactGrade = Field(default=ImpactGrade.HIGH, description="Minimum severity grade (e.g. HIGH, CRITICAL).")
     alert_on_all: bool = Field(default=False, description="If True, bypasses filter threshold for testing.")
     enable_fact_verification: bool = Field(default=False, description="Enforce strict primary/multi-source fact verification gate.")
+    enable_batch_triage: bool = Field(default=True, description="Pre-screen headlines with low-token batch triage to optimize LLM calls & token usage.")
 
     @field_validator("min_impact_grade", mode="before")
     @classmethod
@@ -84,6 +86,7 @@ class LLMSettings(BaseModel):
         description="Ordered list of fallback models on rate limit or failure."
     )
     enable_cache: bool = Field(default=True, description="Enable local response caching.")
+    max_content_length: int = Field(default=3500, description="Max characters of article body passed to LLM to prevent prompt token bloat.")
     monthly_budget_usd: Optional[float] = Field(default=10.0, description="Monthly budget limit in USD.")
     temperature: float = Field(default=0.1, description="Sampling temperature for deterministic analysis.")
     max_retries: int = Field(default=3, description="Maximum API retries upon rate limit or transient errors.")
@@ -108,6 +111,7 @@ class LLMSettings(BaseModel):
 class TelegramSettings(BaseModel):
     bot_token: Optional[str] = Field(default=None, description="Telegram bot authorization token.")
     chat_id: Optional[str] = Field(default=None, description="Destination Telegram chat or channel ID.")
+    batch_notifications: bool = Field(default=True, description="Send multiple recommendations from the same cycle in 1 Telegram push.")
 
     @field_validator("bot_token", "chat_id", mode="before")
     @classmethod

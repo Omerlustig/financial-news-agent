@@ -1691,6 +1691,205 @@ def test_pipeline_fact_verification_disabled_allows_commercial_report_alert(tmp_
     assert sent_analysis.hard_gates.passes_all_gates is True
 
 
+def test_pipeline_batch_notifications_single_push(tmp_path):
+    """Verify that when 2 articles qualify and batch_notifications=True, send_batch_alerts is called once."""
+    from unittest.mock import MagicMock
+    from src.storage.sqlite import SQLiteStorage
+    from src.models import (
+        HardGates,
+        ImpactGrade,
+        MarketImpactAnalysis,
+        RawArticle,
+        TwoLayerGateDecision,
+    )
+    from src.pipeline import Pipeline
+
+    db_path = str(tmp_path / "test_batch.db")
+    storage = SQLiteStorage(db_path)
+
+    art1 = RawArticle(title="Catalyst 1: Oil spike", url="https://reuters.com/oil", source_name="Reuters")
+    art2 = RawArticle(title="Catalyst 2: EV wage freeze", url="https://seekingalpha.com/vw", source_name="Seeking Alpha")
+
+    ana1 = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=8,
+        impact_grade=ImpactGrade.HIGH,
+        summary="Summary 1",
+        catalyst_thesis="Thesis 1",
+        status=EventStatus.OPPORTUNITY_CANDIDATE,
+        four_d_sentiment=FourDimensionalSentiment(fundamental_impact=0.9, expectation_surprise=0.8),
+        adversarial_review=AdversarialReview(bearish_counter_thesis="none", priced_in_risk="none", macro_confounding_risk="none", falsification_threshold="none", is_thesis_robust=True),
+        hard_gates=HardGates(is_novel=True, is_verified=True, has_direct_exposure=True, passes_all_gates=True),
+    )
+    ana2 = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=7,
+        impact_grade=ImpactGrade.HIGH,
+        summary="Summary 2",
+        catalyst_thesis="Thesis 2",
+        status=EventStatus.OPPORTUNITY_CANDIDATE,
+        four_d_sentiment=FourDimensionalSentiment(fundamental_impact=0.8, expectation_surprise=0.7),
+        adversarial_review=AdversarialReview(bearish_counter_thesis="none", priced_in_risk="none", macro_confounding_risk="none", falsification_threshold="none", is_thesis_robust=True),
+        hard_gates=HardGates(is_novel=True, is_verified=True, has_direct_exposure=True, passes_all_gates=True),
+    )
+
+    mock_analyzer = MagicMock()
+    mock_analyzer.analyze.side_effect = [ana1, ana2]
+
+    mock_notifier = MagicMock()
+    mock_notifier.send_batch_alerts.return_value = True
+
+    pipeline = Pipeline(
+        storage=storage,
+        analyzer=mock_analyzer,
+        notifier=mock_notifier,
+        batch_notifications=True,
+        enable_fact_verification=False,
+        extract_full_body=False,
+        min_score=6,
+    )
+
+    summary = pipeline.process_articles([art1, art2])
+    assert summary.analyzed == 2
+    assert summary.alerted == 2
+
+    # Exactly ONE call to send_batch_alerts!
+    mock_notifier.send_batch_alerts.assert_called_once()
+    items = mock_notifier.send_batch_alerts.call_args[0][0]
+    assert len(items) == 2
+    assert items[0][0].title == art1.title
+    assert items[1][0].title == art2.title
+    # send_alert was NOT called individually
+    mock_notifier.send_alert.assert_not_called()
+
+
+def test_pipeline_upfront_noise_filter_skips_llm(tmp_path):
+    """Verifies that syndicated PR, webcast announcements, and dividend calendars
+    are skipped before invoking the LLM, consuming 0 tokens.
+    """
+    db_file = str(tmp_path / "test_noise.db")
+    storage = SQLiteStorage(db_path=db_file)
+    mock_analyzer = MagicMock()
+    mock_notifier = MagicMock()
+
+    noise_art = RawArticle(
+        title="SHAREHOLDER ALERT: Pomerantz Law Firm Investigates Claims on Behalf of Investors",
+        url="https://globenewswire.com/news-release/pomerantz-alert",
+        source_name="GlobeNewswire",
+        summary="Pomerantz LLP reminds investors of class action lawsuit deadline.",
+    )
+
+    pipeline = Pipeline(
+        storage=storage,
+        analyzer=mock_analyzer,
+        notifier=mock_notifier,
+        enable_fact_verification=False,
+        extract_full_body=False,
+    )
+
+    summary = pipeline.process_articles([noise_art])
+
+    # LLM analyze was NEVER called
+    mock_analyzer.analyze.assert_not_called()
+    assert summary.analyzed == 0
+    assert summary.alerted == 0
+    # Article was recorded to storage with alerted=False so it won't be analyzed in future cycles
+    assert storage.is_article_seen(noise_art.content_hash) is True
+
+
+def test_pipeline_batch_triage_filters_routine_headlines(tmp_path):
+    """Verifies that low-token batch triage pre-screens clusters and only deep-analyzes
+    identified catalyst candidates, reducing LLM calls.
+    """
+    db_file = str(tmp_path / "test_triage.db")
+    storage = SQLiteStorage(db_path=db_file)
+    mock_analyzer = MagicMock()
+    mock_notifier = MagicMock()
+    mock_notifier.send_alert.return_value = True
+
+    art0 = RawArticle(
+        title="US Navy Intercepts Oil Tankers in Strait of Hormuz",
+        url="https://reuters.com/hormuz",
+        source_name="Reuters",
+    )
+    art1 = RawArticle(
+        title="Daily Tech Roundup: Top 3 Software Names to Watch Today",
+        url="https://seekingalpha.com/tech-roundup",
+        source_name="Seeking Alpha",
+    )
+    art2 = RawArticle(
+        title="European Market Wrap: Stocks Drift Lower in Light Volume",
+        url="https://bloomberg.com/wrap",
+        source_name="Bloomberg",
+    )
+
+    # Triage screener selects ONLY index 0 as a market catalyst candidate
+    mock_analyzer.screen_catalyst_candidates.return_value = [0]
+
+    catalyst_analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=9,
+        impact_grade=ImpactGrade.CRITICAL,
+        affected_tickers=["$XOM", "$CVX"],
+        affected_sectors=["Energy"],
+        directional_stance=DirectionalStance.BULLISH,
+        status=EventStatus.OPPORTUNITY_CANDIDATE,
+        hard_gates=HardGates(
+            is_novel=True,
+            is_verified=True,
+            has_direct_exposure=True,
+            passes_all_gates=True,
+        ),
+        four_d_sentiment=FourDimensionalSentiment(
+            linguistic_sentiment=0.8,
+            fundamental_impact=0.9,
+            expectation_surprise=0.8,
+            price_implication=0.9,
+            surprise_verdict="BEAT",
+        ),
+        adversarial_review=AdversarialReview(
+            bearish_counter_thesis="De-escalation could reverse oil gains quickly.",
+            priced_in_risk="Geopolitical risk premium already partly elevated.",
+            macro_confounding_risk="Broad index selloff could mute single-stock beta.",
+            falsification_threshold="Tankers released without tariff or disruption.",
+            is_thesis_robust=True,
+        ),
+        summary="Tanker interception disrupts crude flows.",
+        catalyst_thesis="Crude supply disruption transmits into upstream refining margins.",
+    )
+    mock_analyzer.analyze.return_value = catalyst_analysis
+
+    pipeline = Pipeline(
+        storage=storage,
+        analyzer=mock_analyzer,
+        notifier=mock_notifier,
+        enable_batch_triage=True,
+        batch_notifications=False,
+        enable_fact_verification=False,
+        extract_full_body=False,
+        min_score=6,
+    )
+
+    summary = pipeline.process_articles([art0, art1, art2])
+
+    # Triage screener was called once for the batch of 3
+    mock_analyzer.screen_catalyst_candidates.assert_called_once()
+
+    # Heavy LLM analyze was called ONLY ONCE for the selected candidate (art0)
+    mock_analyzer.analyze.assert_called_once()
+    assert mock_analyzer.analyze.call_args[0][0].title == art0.title
+
+    assert summary.analyzed == 1
+    assert summary.alerted == 1
+
+    # Routine articles (art1, art2) are persisted to storage as seen so they are not re-processed
+    assert storage.is_article_seen(art0.content_hash) is True
+    assert storage.is_article_seen(art1.content_hash) is True
+    assert storage.is_article_seen(art2.content_hash) is True
+
+
+
+
 
 
 

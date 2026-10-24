@@ -31,3 +31,17 @@ class BaseNotifier(ABC):
             bool: True if delivery succeeded, False otherwise.
         """
         pass
+
+    def send_batch_alerts(self, items: Any) -> bool:
+        """Format and dispatch multiple recommendations in a single notification push.
+
+        Default implementation falls back to individual send_alert calls.
+        Subclasses (e.g. TelegramNotifier) override this to combine into 1 push.
+        """
+        if not items:
+            return False
+        success = True
+        for art, ana in items:
+            if not self.send_alert(art, ana):
+                success = False
+        return success

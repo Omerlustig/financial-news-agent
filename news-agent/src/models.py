@@ -748,6 +748,10 @@ class MarketImpactAnalysis(BaseModel):
         ...,
         description="Financial analyst thesis detailing the exact mechanism of market impact (revenue, margin, regulation, supply chain)."
     )
+    subtext_analysis: Optional[str] = Field(
+        default=None,
+        description="Reading between the lines: decoded corporate/sovereign subtext, hidden motivations, PR spin translation, and concealed structural pressures."
+    )
     status: EventStatus = Field(
         default=EventStatus.OPPORTUNITY_CANDIDATE,
         description="Decision status gate (OPPORTUNITY_CANDIDATE, WATCHLIST, INFORMATIONAL, UNVERIFIED, NO_ACTION)."

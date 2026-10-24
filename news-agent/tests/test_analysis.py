@@ -1158,4 +1158,81 @@ def test_analyzer_causal_chain_resilience_missing_optional_inner_fields():
     assert len(parsed.recommendation) > 0
 
 
+def test_screen_catalyst_candidates_auto_includes_regulatory_and_watchlist():
+    analyzer = MarketImpactAnalyzer()
+
+    articles = [
+        RawArticle(
+            title="Form 8-K Entry into Material Definitive Agreement regarding Merger",
+            url="https://sec.gov/1",
+            source_name="SEC EDGAR",
+        ),
+        RawArticle(
+            title="Apple announces breakthrough M5 neural engine for servers",
+            url="https://reuters.com/aapl",
+            source_name="Reuters",
+        ),
+        RawArticle(
+            title="Routine daily recap: 3 stocks to watch on a rainy Tuesday",
+            url="https://seekingalpha.com/recap",
+            source_name="Seeking Alpha",
+        ),
+        RawArticle(
+            title="Suez Canal blockage halts Middle East container transit",
+            url="https://bloomberg.com/suez",
+            source_name="Bloomberg",
+        ),
+    ]
+
+    # Article 0 is SEC 8-K (Item 1.01) -> Rule 1 auto-promotes index 0
+    # Article 1 has AAPL and watchlist ticker $AAPL -> Rule 2 auto-promotes index 1
+    # Remaining articles (2 and 3) go to LLM triage.
+    mock_triage_resp = MagicMock()
+    mock_triage_resp.choices = [
+        MagicMock(message=MagicMock(content='{"candidate_indices": [3]}'))
+    ]
+
+    with patch("litellm.completion", return_value=mock_triage_resp) as mock_comp:
+        selected = analyzer.screen_catalyst_candidates(
+            articles,
+            watchlist_tickers=["$AAPL"],
+            watchlist_sectors=["Semiconductors"],
+        )
+
+        # 0 (SEC), 1 (Watchlist), 3 (LLM selected catalyst)
+        assert selected == [0, 1, 3]
+        assert 2 not in selected  # Routine recap excluded
+        assert mock_comp.call_count == 1
+        # Verify the prompt only sent the un-promoted headlines (indices 2 and 3)
+        called_prompt = mock_comp.call_args[1]["messages"][1]["content"]
+        assert "[2] Routine daily recap" in called_prompt
+        assert "[3] Suez Canal blockage" in called_prompt
+        assert "[0] Form 8-K" not in called_prompt
+
+
+def test_screen_catalyst_candidates_small_batch_or_llm_failure():
+    analyzer = MarketImpactAnalyzer()
+
+    # <= 2 articles returns all without calling LLM
+    articles_small = [
+        RawArticle(title="Article 1", url="https://a.com/1", source_name="Reuters"),
+        RawArticle(title="Article 2", url="https://a.com/2", source_name="Bloomberg"),
+    ]
+    with patch("litellm.completion") as mock_comp:
+        res = analyzer.screen_catalyst_candidates(articles_small)
+        assert res == [0, 1]
+        assert mock_comp.call_count == 0
+
+    # > 2 articles with LLM failure falls back safely to all indices
+    articles_large = [
+        RawArticle(title="News 1", url="https://a.com/1", source_name="Reuters"),
+        RawArticle(title="News 2", url="https://a.com/2", source_name="Bloomberg"),
+        RawArticle(title="News 3", url="https://a.com/3", source_name="CNBC"),
+    ]
+    with patch("litellm.completion", side_effect=RuntimeError("API error")):
+        res = analyzer.screen_catalyst_candidates(articles_large)
+        assert res == [0, 1, 2]
+
+
+
 
