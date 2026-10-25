@@ -114,6 +114,7 @@ class Pipeline:
         extract_full_body: Optional[bool] = None,
         batch_notifications: Optional[bool] = None,
         enable_batch_triage: Optional[bool] = None,
+        buy_opportunities_only: Optional[bool] = None,
     ) -> None:
         self.settings = settings
         self.force = force
@@ -127,6 +128,14 @@ class Pipeline:
             self.enable_batch_triage = bool(settings.filter.enable_batch_triage)
         else:
             self.enable_batch_triage = True
+
+        # Buy opportunities only filter toggle (suppress avoid/short-only alerts)
+        if buy_opportunities_only is not None:
+            self.buy_opportunities_only = bool(buy_opportunities_only)
+        elif settings is not None and getattr(settings, "filter", None) is not None and hasattr(settings.filter, "buy_opportunities_only"):
+            self.buy_opportunities_only = bool(settings.filter.buy_opportunities_only)
+        else:
+            self.buy_opportunities_only = False
 
         # Fact verification toggle (disabled per user request)
         if enable_fact_verification is not None:
@@ -375,7 +384,71 @@ class Pipeline:
                 )
                 return False
 
+        # 7. Actionable buy opportunity requirement (suppress avoid/short-only alerts)
+        if self.buy_opportunities_only:
+            if not self.is_buy_opportunity(analysis):
+                logger.info(
+                    "Alert suppressed: catalyst represents an avoid/short positioning with no buy beneficiaries "
+                    "(stance=%s, beneficiaries=%s, negatively_exposed=%s) "
+                    "(audit reason: buy_opportunities_only=True)",
+                    getattr(analysis.directional_stance, "value", str(analysis.directional_stance)),
+                    getattr(analysis.causal_chain, "beneficiaries", []) if analysis.causal_chain else [],
+                    getattr(analysis.causal_chain, "negatively_exposed", []) if analysis.causal_chain else [],
+                )
+                return False
+
         return True
+
+    def is_buy_opportunity(self, analysis: MarketImpactAnalysis) -> bool:
+        """Determine whether an analysis qualifies as an actionable BUY opportunity.
+
+        Returns False if the catalyst is purely an avoid, hedge, or short recommendation
+        with no actionable long beneficiaries.
+        """
+        # 1. Explicit causal chain beneficiaries
+        if analysis.causal_chain is not None:
+            valid_beneficiaries = [
+                b for b in (analysis.causal_chain.beneficiaries or [])
+                if b and str(b).strip().upper() not in ("NONE", "NULL", "N/A", "")
+            ]
+            if valid_beneficiaries:
+                return True
+
+            # If causal chain is present and beneficiaries is empty,
+            # but negatively exposed tickers exist -> purely avoid/hedge
+            valid_negatives = [
+                e for e in (analysis.causal_chain.negatively_exposed or [])
+                if e and str(e).strip().upper() not in ("NONE", "NULL", "N/A", "")
+            ]
+            if valid_negatives:
+                return False
+
+        # 2. Check directional stance
+        stance = getattr(analysis, "directional_stance", None)
+        stance_val = (getattr(stance, "value", str(stance)) or "NEUTRAL").upper()
+
+        if "BEAR" in stance_val:
+            # Bearish stance with no explicit beneficiaries is an avoid/short candidate
+            return False
+
+        # 3. Check affected tickers for non-bearish stance
+        valid_affected = [
+            t for t in (analysis.affected_tickers or [])
+            if t and str(t).strip().upper() not in ("NONE", "NULL", "N/A", "")
+        ]
+        if valid_affected:
+            return True
+
+        # 4. Check recommendation text if present
+        rec = getattr(analysis, "recommendation", None)
+        if rec:
+            rec_lower = str(rec).lower()
+            if any(w in rec_lower for w in ["buy", "accumulate", "favor", "overweight", "long", "opportunity"]):
+                return True
+            if any(w in rec_lower for w in ["avoid", "hedge", "short", "underweight", "caution", "reduce"]):
+                return False
+
+        return False
 
     def process_articles(self, articles: List[RawArticle]) -> CycleSummary:
         """Process a list of ingested articles through deduplication, analysis,

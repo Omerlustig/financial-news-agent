@@ -14,6 +14,7 @@ filter:
   alert_on_all: false
   enable_fact_verification: false # Fact-verification gate toggle (currently disabled per request)
   enable_batch_triage: true # Pre-screen headlines with low-token batch triage to optimize API calls
+  buy_opportunities_only: true # Only alert on actionable buy opportunities (suppress avoid/short/hedge-only alerts)
 
 llm:
   model: "gemini/gemini-3.8-flash"

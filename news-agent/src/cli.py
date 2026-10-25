@@ -307,6 +307,7 @@ def run_once(
     force: bool = typer.Option(False, "--force", "-f", help="Force re-evaluation of articles in window including previously seen/alerted (strictly enforcing decision gates)"),
     limit_per_source: Optional[int] = typer.Option(None, "--limit-per-source", "--batch-size", "-b", help="Max articles to fetch per site (overrides settings.yaml)"),
     max_age_minutes: Optional[int] = typer.Option(None, "--max-age-minutes", "-m", help="Filter articles older than N minutes (overrides settings.yaml)"),
+    buy_only: Optional[bool] = typer.Option(None, "--buy-only/--all-stances", help="Only alert on buy opportunities (overrides settings.yaml)"),
 ) -> None:
     """Execute a single news scan, analysis, alerting, and persistence cycle."""
     console.print("[bold cyan]Executing single scan cycle...[/bold cyan]")
@@ -323,6 +324,7 @@ def run_once(
         force=force,
         batch_size_per_source=limit_per_source,
         max_article_age_minutes=max_age_minutes,
+        buy_opportunities_only=buy_only if buy_only is not None else settings.filter.buy_opportunities_only,
     )
 
     try:

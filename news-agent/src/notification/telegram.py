@@ -557,6 +557,7 @@ def format_clean_opportunity_item(
     article: RawArticle,
     analysis: MarketImpactAnalysis,
     index: Optional[int] = None,
+    include_avoid: bool = False,
 ) -> str:
     """Formats a single investment opportunity into a clean, focused, zero-noise summary block."""
     score = analysis.confidence_score if analysis.confidence_score is not None else 0
@@ -636,11 +637,11 @@ def format_clean_opportunity_item(
                 mechanism = mechanism[:177] + "..."
             lines.append(f"• <b>Why It Matters:</b> {escape_html(mechanism)}")
 
-    # Actionable positioning (Favor vs Avoid/Hedge)
+    # Actionable positioning (Buy vs Avoid/Hedge)
     action_parts: List[str] = []
     if beneficiaries:
-        action_parts.append(f"🟢 <b>Favor:</b> {', '.join(beneficiaries)}")
-    if negatively_exposed:
+        action_parts.append(f"🟢 <b>Buy:</b> {', '.join(beneficiaries)}")
+    if include_avoid and negatively_exposed:
         action_parts.append(f"🔴 <b>Avoid/Hedge:</b> {', '.join(negatively_exposed)}")
     if action_parts:
         lines.append(f"• <b>Action:</b> {' | '.join(action_parts)}")
@@ -679,6 +680,7 @@ def format_clean_telegram_message(
     article: RawArticle,
     analysis: MarketImpactAnalysis,
     directional_stance: Optional[str] = None,
+    include_avoid: bool = False,
 ) -> str:
     """Format an individual catalyst alert into a focused, short, zero-noise Telegram message."""
     score = analysis.confidence_score if analysis.confidence_score is not None else 0
@@ -688,11 +690,14 @@ def format_clean_telegram_message(
         else "HIGH"
     )
     header = f"🚨 <b>[OPPORTUNITY CANDIDATE | Score: {score}/10 | {escape_html(grade)}]</b>\n"
-    body = format_clean_opportunity_item(article, analysis, index=None)
+    body = format_clean_opportunity_item(article, analysis, index=None, include_avoid=include_avoid)
     return safe_truncate_html(f"{header}\n{body}")
 
 
-def format_batch_telegram_message(items: List[Tuple[RawArticle, MarketImpactAnalysis]]) -> str:
+def format_batch_telegram_message(
+    items: List[Tuple[RawArticle, MarketImpactAnalysis]],
+    include_avoid: bool = False,
+) -> str:
     """Combines 1 or more investment recommendations into a single, clean, focused Telegram push."""
     if not items:
         return ""
@@ -701,13 +706,13 @@ def format_batch_telegram_message(items: List[Tuple[RawArticle, MarketImpactAnal
         art, ana = items[0]
         score = ana.confidence_score if ana.confidence_score is not None else 0
         header = f"🚨 <b>MARKET OPPORTUNITY (Score: {score}/10)</b>\n"
-        body = format_clean_opportunity_item(art, ana, index=None)
+        body = format_clean_opportunity_item(art, ana, index=None, include_avoid=include_avoid)
         return safe_truncate_html(f"{header}\n{body}")
 
     header = f"🚨 <b>MARKET OPPORTUNITIES ({len(items)} In Focus)</b>\n"
     item_blocks = []
     for idx, (art, ana) in enumerate(items, 1):
-        item_blocks.append(format_clean_opportunity_item(art, ana, index=idx))
+        item_blocks.append(format_clean_opportunity_item(art, ana, index=idx, include_avoid=include_avoid))
 
     separator = "\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
     content = header + "\n" + separator.join(item_blocks)

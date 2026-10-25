@@ -67,6 +67,7 @@ class FilterSettings(BaseModel):
     alert_on_all: bool = Field(default=False, description="If True, bypasses filter threshold for testing.")
     enable_fact_verification: bool = Field(default=False, description="Enforce strict primary/multi-source fact verification gate.")
     enable_batch_triage: bool = Field(default=True, description="Pre-screen headlines with low-token batch triage to optimize LLM calls & token usage.")
+    buy_opportunities_only: bool = Field(default=True, description="If True, only dispatch notifications for buy opportunities (favorable/long catalysts with beneficiaries), suppressing avoid/hedge-only alerts.")
 
     @field_validator("min_impact_grade", mode="before")
     @classmethod

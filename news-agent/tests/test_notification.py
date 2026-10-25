@@ -951,9 +951,14 @@ def test_format_batch_telegram_message_single():
     assert "$XOM, $CVX, $XLE" in msg
     assert "• <b>Catalyst:</b>" in msg
     assert "• <b>Behind The Lines:</b> Escalation risk premium pricing in" in msg
-    assert "• <b>Action:</b> 🟢 <b>Favor:</b> $XOM, $CVX, $XLE | 🔴 <b>Avoid/Hedge:</b> $DAL, $UAL, $JETS" in msg
+    assert "• <b>Action:</b> 🟢 <b>Buy:</b> $XOM, $CVX, $XLE" in msg
+    assert "Avoid/Hedge" not in msg
     assert "• <b>Risk / Invalidation:</b> Crude drops below $75/bbl" in msg
     assert '<a href="https://reuters.com/world/middle-east/iran-strikes">Reuters</a>' in msg
+
+    # Verify include_avoid=True opt-in behavior
+    msg_with_avoid = format_batch_telegram_message([(art, ana)], include_avoid=True)
+    assert "🔴 <b>Avoid/Hedge:</b> $DAL, $UAL, $JETS" in msg_with_avoid
 
 
 def test_format_batch_telegram_message_multiple():

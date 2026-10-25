@@ -172,6 +172,9 @@ Your primary objective is to pinpoint actionable, asymmetric investment opportun
    - Stance Alignment: If directional_stance is BEARISH for a sector, 'beneficiaries' must only be explicit counter-trend winners or inverse hedges, NOT the primary company suffering the catalyst.
    - Contract Cancellations & Disputes: When an enterprise terminates a contract, the terminated supplier/host takes the revenue and utilization loss. The buyer is exercising capital discipline (neutral or positive cash flow), NOT a short.
    - Noise vs Opportunity: If an article is merely general market commentary, routine analyst opinion, consensus macro data, or localized minor news without a clear tradeable edge, assign status 'INFORMATIONAL', 'WATCHLIST', or 'NO_ACTION'. ONLY assign 'OPPORTUNITY_CANDIDATE' when you can clearly articulate an asymmetric winner and a measurable invalidation condition.
+   - Actionable Buy Opportunities Focus:
+     * Assign 'OPPORTUNITY_CANDIDATE' ONLY when there is a concrete tradeable BUY / LONG opportunity with identifiable 'beneficiaries' (stocks or sector ETFs positioned to gain).
+     * If an event is purely negative or bearish for an individual stock or sector (e.g. ad revenue deceleration, regulatory fines, guidance cuts) where the only action is to avoid, hedge, or short, and there are NO tradeable buy beneficiaries identified, DO NOT classify as 'OPPORTUNITY_CANDIDATE'. Classify as 'WATCHLIST' or 'INFORMATIONAL'.
 
 TICKER VALIDATION & PUBLIC vs PRIVATE ENTITY RULES:
 - Output ONLY real, tradeable public equity or ETF ticker symbols prefixed with '$' (e.g., '$NVDA', '$AAPL', '$TSM', '$SMH', '$LUMI', '$CHKP', '$PANW').

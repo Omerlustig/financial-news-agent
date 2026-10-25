@@ -1888,6 +1888,138 @@ def test_pipeline_batch_triage_filters_routine_headlines(tmp_path):
     assert storage.is_article_seen(art2.content_hash) is True
 
 
+def test_pipeline_suppresses_bearish_avoid_only_catalyst(tmp_path):
+    """Verify that avoid-only / bearish catalysts with no buy opportunities are suppressed when buy_opportunities_only=True."""
+    from src.models import CausalChain, DirectionalStance, EventStatus, HardGates, ImpactGrade, RawArticle, MarketImpactAnalysis
+    from src.storage.sqlite import SQLiteStorage
+
+    db_path = str(tmp_path / "test_avoid_suppression.db")
+    storage = SQLiteStorage(db_path=db_path)
+    mock_analyzer = MagicMock()
+    mock_notifier = MagicMock()
+
+    art = RawArticle(
+        title="Meta’s Ad Sales Are Suffering Now That Europeans Can Pick Less Personalization",
+        url="https://wired.com/story/metas-ad-sales-suffering",
+        source_name="Wired",
+    )
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=8,
+        impact_grade=ImpactGrade.HIGH,
+        affected_tickers=["$META"],
+        affected_sectors=["Digital Advertising"],
+        summary="Meta ad sales decelerated to 18% YoY in Europe due to EU DMA rules.",
+        catalyst_thesis="Degraded ad targeting precision leads to regional revenue drag.",
+        directional_stance=DirectionalStance.BEARISH,
+        status=EventStatus.OPPORTUNITY_CANDIDATE,
+        causal_chain=CausalChain(
+            event_facts="Meta European ad growth slowed.",
+            economic_mechanism="Less personalized ads lower conversion efficiency.",
+            affected_sectors=["Digital Advertising"],
+            beneficiaries=[],
+            negatively_exposed=["$META"],
+            invalidation_conditions="Q4 ad growth rebound.",
+        ),
+        hard_gates=HardGates(
+            is_novel=True,
+            is_verified=True,
+            has_direct_exposure=True,
+            passes_all_gates=True,
+        ),
+        recommendation="Maintain cautious positioning. Actionable Positioning: 🔴 Avoid/Hedge: $META",
+    )
+    mock_analyzer.analyze.return_value = analysis
+
+    pipeline = Pipeline(
+        storage=storage,
+        analyzer=mock_analyzer,
+        notifier=mock_notifier,
+        buy_opportunities_only=True,
+        enable_fact_verification=False,
+        min_score=6,
+    )
+
+    # 1. should_alert directly returns False
+    assert pipeline.should_alert(analysis) is False
+
+    # 2. Cycle processes the article, saves to storage as unalerted, and dispatches zero notifications
+    summary = pipeline.process_articles([art])
+    assert summary.analyzed == 1
+    assert summary.alerted == 0
+    mock_notifier.send_alert.assert_not_called()
+
+    # 3. If buy_opportunities_only is toggled False, the alert passes
+    pipeline_all = Pipeline(
+        storage=storage,
+        analyzer=mock_analyzer,
+        notifier=mock_notifier,
+        buy_opportunities_only=False,
+        enable_fact_verification=False,
+        min_score=6,
+    )
+    assert pipeline_all.should_alert(analysis) is True
+
+
+def test_pipeline_allows_catalyst_with_buy_beneficiaries(tmp_path):
+    """Verify that catalysts identifying tradeable buy beneficiaries pass through to alert dispatch."""
+    from src.models import CausalChain, DirectionalStance, EventStatus, HardGates, ImpactGrade, RawArticle, MarketImpactAnalysis
+    from src.storage.sqlite import SQLiteStorage
+
+    db_path = str(tmp_path / "test_buy_beneficiaries.db")
+    storage = SQLiteStorage(db_path=db_path)
+    mock_analyzer = MagicMock()
+    mock_notifier = MagicMock()
+    mock_notifier.send_alert.return_value = True
+
+    art = RawArticle(
+        title="US Conducts Airstrikes in Iran; Oil Shipping Chokepoints at Risk",
+        url="https://reuters.com/iran-strikes",
+        source_name="Reuters",
+    )
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=8,
+        impact_grade=ImpactGrade.HIGH,
+        affected_tickers=["$XOM", "$CVX"],
+        affected_sectors=["Energy"],
+        summary="Crude spike expands margins for oil producers.",
+        catalyst_thesis="Supply disruption lifts spot oil prices.",
+        directional_stance=DirectionalStance.BULLISH,
+        status=EventStatus.OPPORTUNITY_CANDIDATE,
+        causal_chain=CausalChain(
+            event_facts="Airstrikes conducted.",
+            economic_mechanism="Crude price surge.",
+            affected_sectors=["Energy", "Airlines"],
+            beneficiaries=["$XOM", "$CVX", "$XLE"],
+            negatively_exposed=["$DAL", "$UAL"],
+            invalidation_conditions="Crude drops below $75/bbl.",
+        ),
+        hard_gates=HardGates(
+            is_novel=True,
+            is_verified=True,
+            has_direct_exposure=True,
+            passes_all_gates=True,
+        ),
+    )
+    mock_analyzer.analyze.return_value = analysis
+
+    pipeline = Pipeline(
+        storage=storage,
+        analyzer=mock_analyzer,
+        notifier=mock_notifier,
+        buy_opportunities_only=True,
+        enable_fact_verification=False,
+        min_score=6,
+    )
+
+    assert pipeline.should_alert(analysis) is True
+    summary = pipeline.process_articles([art])
+    assert summary.analyzed == 1
+    assert summary.alerted == 1
+    mock_notifier.send_alert.assert_called_once_with(art, analysis)
+
+
 
 
 
