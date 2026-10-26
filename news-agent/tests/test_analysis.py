@@ -1234,5 +1234,111 @@ def test_screen_catalyst_candidates_small_batch_or_llm_failure():
         assert res == [0, 1, 2]
 
 
+def test_analyzer_fast_failover_on_timeout():
+    """Verify that a timeout on primary model fails over immediately to fallback and exhausts primary."""
+    import litellm
+    from src.config import LLMSettings
+
+    settings = LLMSettings(
+        model="gemini/gemini-3.7-flash",
+        fallback_models=["gemini/gemini-flash-lite-latest"],
+        timeout=15.0,
+        max_retries=3,
+    )
+    analyzer = MarketImpactAnalyzer(llm_settings=settings)
+    art1 = RawArticle(title="Catalyst 1", url="https://a.com/1", source_name="Reuters")
+    art2 = RawArticle(title="Catalyst 2", url="https://a.com/2", source_name="Bloomberg")
+
+    models_called = []
+
+    def mock_comp(model, **kwargs):
+        models_called.append(model)
+        if model == "gemini/gemini-3.7-flash":
+            raise litellm.Timeout("Connection timed out after None seconds.", model="gemini/gemini-3.7-flash", llm_provider="gemini")
+        return {
+            "choices": [{"message": {"content": MOCK_LLM_JSON}}],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
+        }
+
+    with patch("litellm.completion", side_effect=mock_comp), \
+         patch("litellm.completion_cost", return_value=0.00001):
+        # 1. First article: primary times out and immediately fails over to fallback
+        res1 = analyzer.analyze(art1)
+        assert res1.token_usage.model_name == "gemini/gemini-flash-lite-latest"
+        assert "gemini/gemini-3.7-flash" in analyzer.exhausted_models
+
+        # 2. Second article: primary is already marked exhausted, so it directly uses fallback!
+        models_called.clear()
+        res2 = analyzer.analyze(art2)
+        assert res2.token_usage.model_name == "gemini/gemini-flash-lite-latest"
+        assert models_called == ["gemini/gemini-flash-lite-latest"]
+
+
+def test_analyzer_fast_failover_on_503_high_demand():
+    """Verify that 503 high demand triggers immediate failover to fallback model."""
+    from src.config import LLMSettings
+
+    settings = LLMSettings(
+        model="gemini/gemini-3.7-flash",
+        fallback_models=["gemini/gemini-flash-lite-latest"],
+        max_retries=3,
+    )
+    analyzer = MarketImpactAnalyzer(llm_settings=settings)
+    art = RawArticle(title="High Demand Catalyst", url="https://a.com/hd", source_name="Reuters")
+
+    models_called = []
+
+    class HighDemandError(Exception):
+        status_code = 503
+
+    def mock_comp(model, **kwargs):
+        models_called.append(model)
+        if model == "gemini/gemini-3.7-flash":
+            raise HighDemandError("The model is overloaded. Please try again later.")
+        return {
+            "choices": [{"message": {"content": MOCK_LLM_JSON}}],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
+        }
+
+    with patch("litellm.completion", side_effect=mock_comp), \
+         patch("litellm.completion_cost", return_value=0.00001):
+        res = analyzer.analyze(art)
+        assert res.token_usage.model_name == "gemini/gemini-flash-lite-latest"
+        assert "gemini/gemini-3.7-flash" in analyzer.exhausted_models
+        assert models_called == ["gemini/gemini-3.7-flash", "gemini/gemini-flash-lite-latest"]
+
+
+def test_screen_catalyst_candidates_failover():
+    """Verify that batch triage screener fails over to fallback model if primary fails."""
+    from src.config import LLMSettings
+
+    settings = LLMSettings(
+        model="gemini/gemini-3.7-flash",
+        fallback_models=["gemini/gemini-flash-lite-latest"],
+    )
+    analyzer = MarketImpactAnalyzer(llm_settings=settings)
+    articles = [
+        RawArticle(title="News 1", url="https://a.com/1", source_name="Reuters"),
+        RawArticle(title="News 2", url="https://a.com/2", source_name="Bloomberg"),
+        RawArticle(title="News 3", url="https://a.com/3", source_name="CNBC"),
+    ]
+
+    models_called = []
+
+    def mock_comp(model, **kwargs):
+        models_called.append(model)
+        if model == "gemini/gemini-3.7-flash":
+            raise RuntimeError("Primary model rate limit / timeout")
+        return {
+            "choices": [{"message": {"content": '{"candidate_indices": [0, 2]}'}}],
+        }
+
+    with patch("litellm.completion", side_effect=mock_comp):
+        selected = analyzer.screen_catalyst_candidates(articles)
+        assert selected == [0, 2]
+        assert models_called == ["gemini/gemini-3.7-flash", "gemini/gemini-flash-lite-latest"]
+        assert "gemini/gemini-3.7-flash" in analyzer.exhausted_models
+
+
 
 

@@ -118,6 +118,11 @@ class MarketImpactAnalyzer:
             self.backoff_factor = backoff_factor
 
         self.fallback_on_error = fallback_on_error
+        self.timeout = (
+            getattr(self.llm_settings, "timeout", 15.0)
+            if self.llm_settings is not None
+            else 15.0
+        )
         self.max_content_length = (
             getattr(self.llm_settings, "max_content_length", 3500)
             if self.llm_settings is not None
@@ -224,35 +229,57 @@ class MarketImpactAnalyzer:
             {"role": "user", "content": triage_prompt},
         ]
 
-        try:
-            target_model = self.model
-            completion_kwargs: Dict[str, Any] = {
-                "model": target_model,
-                "messages": messages,
-                "response_format": {"type": "json_object"},
-                "timeout": 20.0,
-            }
-            if not ("gemini-3" in target_model or "gemini/gemini-3" in target_model):
-                completion_kwargs["temperature"] = 0.1
+        triage_models = [self.model]
+        if self.fallback_models:
+            triage_models.extend(self.fallback_models)
+        elif self.fallback_model:
+            triage_models.append(self.fallback_model)
+        active_triage_models = [m for m in triage_models if m not in self.exhausted_models]
+        if not active_triage_models:
+            active_triage_models = list(triage_models)
 
-            response = litellm.completion(**completion_kwargs)
-            raw_content = self._extract_content(response)
-            cleaned = clean_json_markdown(raw_content)
-            data = json.loads(cleaned)
-            selected = data.get("candidate_indices", [])
-            if isinstance(selected, list):
-                for s_idx in selected:
-                    if isinstance(s_idx, int) and 0 <= s_idx < len(articles):
-                        candidate_indices.add(s_idx)
-            logger.info(
-                "Batch triage screener: evaluated %d headlines in 1 call; selected %d candidate catalysts.",
-                len(articles),
-                len(candidate_indices),
-            )
-        except Exception as exc:
+        triage_timeout = min(self.timeout, 15.0)
+        triage_success = False
+
+        for target_model in active_triage_models:
+            try:
+                completion_kwargs: Dict[str, Any] = {
+                    "model": target_model,
+                    "messages": messages,
+                    "response_format": {"type": "json_object"},
+                    "timeout": triage_timeout,
+                }
+                if not ("gemini-3" in target_model or "gemini/gemini-3" in target_model):
+                    completion_kwargs["temperature"] = 0.1
+
+                response = litellm.completion(**completion_kwargs)
+                raw_content = self._extract_content(response)
+                cleaned = clean_json_markdown(raw_content)
+                data = json.loads(cleaned)
+                selected = data.get("candidate_indices", [])
+                if isinstance(selected, list):
+                    for s_idx in selected:
+                        if isinstance(s_idx, int) and 0 <= s_idx < len(articles):
+                            candidate_indices.add(s_idx)
+                logger.info(
+                    "Batch triage screener (model=%s): evaluated %d headlines in 1 call; selected %d candidate catalysts.",
+                    target_model,
+                    len(articles),
+                    len(candidate_indices),
+                )
+                triage_success = True
+                break
+            except Exception as exc:
+                logger.warning(
+                    "Batch triage call on '%s' failed (%s); trying next model...",
+                    target_model,
+                    exc,
+                )
+                self.exhausted_models.add(target_model)
+
+        if not triage_success:
             logger.warning(
-                "Batch triage call failed (%s); falling back to analyzing all articles without triage.",
-                exc,
+                "Batch triage call failed across all candidate models; falling back to analyzing all articles without triage."
             )
             return list(range(len(articles)))
 
@@ -292,8 +319,11 @@ class MarketImpactAnalyzer:
         else:
             # Standard resilient fallback model candidates across versions and providers
             standard_fallbacks = [
-                "gemini/gemini-3.7-flash",
+                "gemini/gemini-flash-lite-latest",
+                "gemini/gemini-3.5-flash-lite",
                 "gemini/gemini-3.6-flash",
+                "gemini/gemini-3.1-flash-lite",
+                "gemini/gemini-3.7-flash",
             ]
             if os.environ.get("OPENAI_API_KEY"):
                 standard_fallbacks.append("gpt-4o-mini")
@@ -337,7 +367,7 @@ class MarketImpactAnalyzer:
                         "model": target_model,
                         "messages": messages,
                         "response_format": {"type": "json_object"},
-                        "timeout": 45.0,
+                        "timeout": self.timeout,
                     }
                     if not ("gemini-3" in target_model or "gemini/gemini-3" in target_model):
                         completion_kwargs["temperature"] = self.temperature
@@ -394,6 +424,11 @@ class MarketImpactAnalyzer:
                 except Exception as e:
                     last_error = e
                     err_str = str(e).lower()
+                    is_timeout = (
+                        isinstance(e, (litellm.Timeout, TimeoutError))
+                        or "timeout" in err_str
+                        or "timed out" in err_str
+                    )
                     is_rate_limit = (
                         getattr(e, "status_code", None) == 429
                         or (hasattr(e, "response") and getattr(e.response, "status_code", None) == 429)
@@ -465,8 +500,69 @@ class MarketImpactAnalyzer:
                             )
                             break
 
-                    # 3. Rate limit (429) or high demand (503): backoff and retry first, then fallback to other models!
-                    if is_rate_limit or is_high_demand:
+                    # 3. Connection / Read Timeout: fast failover to avoid stalling cycle
+                    if is_timeout:
+                        if attempt >= min(2, self.max_retries) or has_fallback_remaining:
+                            self.exhausted_models.add(target_model)
+                            if has_fallback_remaining:
+                                next_model = active_models[model_idx + 1]
+                                logger.warning(
+                                    "Model '%s' timed out after %.1fs (attempt %d/%d); failing over immediately to fallback model '%s'",
+                                    target_model,
+                                    self.timeout,
+                                    attempt,
+                                    self.max_retries,
+                                    next_model,
+                                )
+                                break
+                            else:
+                                logger.warning(
+                                    "Model '%s' timed out after %.1fs (attempt %d/%d) and no further fallback models remain.",
+                                    target_model,
+                                    self.timeout,
+                                    attempt,
+                                    self.max_retries,
+                                )
+                                break
+                        else:
+                            logger.warning(
+                                "Model '%s' timed out after %.1fs (attempt %d/%d); retrying once...",
+                                target_model,
+                                self.timeout,
+                                attempt,
+                                self.max_retries,
+                            )
+                            time.sleep(1.0)
+                            continue
+
+                    # 4. High demand (503 / overloaded server): failover immediately if fallback available
+                    if is_high_demand:
+                        self.exhausted_models.add(target_model)
+                        if has_fallback_remaining:
+                            next_model = active_models[model_idx + 1]
+                            logger.warning(
+                                "Model '%s' encountered high demand (503); failing over immediately to fallback model '%s'",
+                                target_model,
+                                next_model,
+                            )
+                            break
+                        elif attempt < self.max_retries:
+                            sleep_time = max(current_delay, 2.0 * attempt)
+                            logger.warning(
+                                "Model '%s' encountered high demand (503) (attempt %d/%d); backing off for %.1fs before retry",
+                                target_model,
+                                attempt,
+                                self.max_retries,
+                                sleep_time,
+                            )
+                            time.sleep(sleep_time)
+                            current_delay *= self.backoff_factor
+                            continue
+                        else:
+                            break
+
+                    # 5. Rate limit (429): backoff and retry first, then fallback to other models!
+                    if is_rate_limit:
                         if attempt < self.max_retries:
                             sleep_time = max(current_delay, 2.0 * attempt)
                             retry_after = getattr(e, "retry_after", None)
@@ -476,9 +572,8 @@ class MarketImpactAnalyzer:
                                 except Exception:
                                     pass
                             logger.warning(
-                                "Model '%s' encountered %s (attempt %d/%d); backing off for %.1fs before retry",
+                                "Model '%s' encountered rate limit (429) (attempt %d/%d); backing off for %.1fs before retry",
                                 target_model,
-                                "high demand (503)" if is_high_demand else "rate limit (429)",
                                 attempt,
                                 self.max_retries,
                                 sleep_time,
@@ -492,23 +587,21 @@ class MarketImpactAnalyzer:
                             if has_fallback_remaining:
                                 next_model = active_models[model_idx + 1]
                                 logger.warning(
-                                    "Model '%s' exhausted all %d attempts (%s); failing over to fallback model '%s'",
+                                    "Model '%s' exhausted all %d attempts (rate limit 429); failing over to fallback model '%s'",
                                     target_model,
                                     self.max_retries,
-                                    "high demand (503)" if is_high_demand else "rate limit (429)",
                                     next_model,
                                 )
                                 break
                             else:
                                 logger.warning(
-                                    "Model '%s' exhausted all %d attempts (%s) and no further fallback models remain.",
+                                    "Model '%s' exhausted all %d attempts (rate limit 429) and no further fallback models remain.",
                                     target_model,
                                     self.max_retries,
-                                    "high demand (503)" if is_high_demand else "rate limit (429)",
                                 )
                                 break
 
-                    # 4. Other exceptions (parse error, network drop, etc.)
+                    # 6. Other exceptions (parse error, network drop, etc.)
                     logger.warning(
                         "LLM analysis attempt %d/%d on model '%s' failed: %s",
                         attempt,
@@ -520,15 +613,17 @@ class MarketImpactAnalyzer:
                         time.sleep(current_delay)
                         current_delay *= self.backoff_factor
                         continue
-                    elif has_fallback_remaining:
-                        next_model = active_models[model_idx + 1]
-                        logger.warning(
-                            "Model '%s' failed all %d attempts; failing over to fallback model '%s'",
-                            target_model,
-                            self.max_retries,
-                            next_model,
-                        )
-                        break
+                    else:
+                        self.exhausted_models.add(target_model)
+                        if has_fallback_remaining:
+                            next_model = active_models[model_idx + 1]
+                            logger.warning(
+                                "Model '%s' failed all %d attempts; failing over to fallback model '%s'",
+                                target_model,
+                                self.max_retries,
+                                next_model,
+                            )
+                            break
 
         # All models and retries failed
         error_msg = f"LLM analysis failed after {self.max_retries} retries across models (unparseable JSON or API error): {last_error}"

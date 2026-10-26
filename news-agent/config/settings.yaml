@@ -18,11 +18,15 @@ filter:
 
 llm:
   model: "gemini/gemini-3.8-flash"
-  fallback_model: "gemini/gemini-3.7-flash" # Primary fallback model on rate limit or failure
+  fallback_model: "gemini/gemini-flash-lite-latest" # Primary fallback model on rate limit or failure
   fallback_models:
-    - "gemini/gemini-3.7-flash"
+    - "gemini/gemini-flash-lite-latest"
+    - "gemini/gemini-3.5-flash-lite"
     - "gemini/gemini-3.6-flash"
+    - "gemini/gemini-3.1-flash-lite"
+    - "gemini/gemini-3.7-flash"
     - "gpt-4o-mini"
+  timeout: 15.0 # Per-request timeout in seconds (prevents hanging on overloaded models)
   enable_cache: true # Enable LiteLLM response caching
   max_content_length: 3500 # Max characters of article body passed to LLM (prevents prompt token bloat)
   monthly_budget_usd: 10.0 # Monthly LLM spending cap in USD

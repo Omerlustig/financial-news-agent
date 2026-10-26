@@ -101,12 +101,16 @@ class LLMSettings(BaseModel):
     fallback_model: Optional[str] = Field(default="gemini/gemini-3.7-flash", description="Primary fallback LiteLLM model identifier.")
     fallback_models: List[str] = Field(
         default_factory=lambda: [
+            "gemini/gemini-flash-lite-latest",
+            "gemini/gemini-3.5-flash-lite",
             "gemini/gemini-3.7-flash",
             "gemini/gemini-3.6-flash",
+            "gemini/gemini-3.1-flash-lite",
             "gpt-4o-mini",
         ],
         description="Ordered list of fallback models on rate limit or failure."
     )
+    timeout: float = Field(default=15.0, ge=1.0, le=120.0, description="Per-request timeout in seconds for LLM completions to prevent hangs.")
     enable_cache: bool = Field(default=True, description="Enable local response caching.")
     max_content_length: int = Field(default=3500, description="Max characters of article body passed to LLM to prevent prompt token bloat.")
     monthly_budget_usd: Optional[float] = Field(default=10.0, description="Monthly budget limit in USD.")
