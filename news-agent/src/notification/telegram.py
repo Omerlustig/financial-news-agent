@@ -616,6 +616,7 @@ def format_clean_opportunity_item(
     analysis: MarketImpactAnalysis,
     index: Optional[int] = None,
     include_avoid: bool = False,
+    sources: Optional[List[Tuple[str, Optional[str]]]] = None,
 ) -> str:
     """Formats a single investment opportunity into a clean, focused, zero-noise summary block."""
     score = analysis.confidence_score if analysis.confidence_score is not None else 0
@@ -713,12 +714,23 @@ def format_clean_opportunity_item(
         clean_risk = truncate_at_word(str(risk_text), max_length=140)
         lines.append(f"• <b>Risk:</b> {escape_html(clean_risk)}")
 
-    # 5. Source Link
-    source_name = article.source_name or "Source"
-    if article.url:
-        lines.append(f"🔗 <a href=\"{article.url}\">{escape_html(source_name)}</a>")
+    # 5. Source Link(s)
+    resolved_sources = sources if sources else [(article.source_name or "Source", article.url)]
+    source_links: List[str] = []
+    seen_urls = set()
+    for s_name, s_url in resolved_sources:
+        s_display = s_name or "Source"
+        if s_url and s_url not in seen_urls:
+            seen_urls.add(s_url)
+            source_links.append(f"<a href=\"{html.escape(s_url, quote=True)}\">{escape_html(s_display)}</a>")
+        elif not s_url and s_display not in seen_urls:
+            seen_urls.add(s_display)
+            source_links.append(escape_html(s_display))
+
+    if source_links:
+        lines.append(f"🔗 {' | '.join(source_links)}")
     else:
-        lines.append(f"📰 {escape_html(source_name)}")
+        lines.append(f"📰 {escape_html(article.source_name or 'Source')}")
 
     return "\n".join(lines)
 
@@ -741,6 +753,98 @@ def format_clean_telegram_message(
     return safe_truncate_html(f"{header}\n{body}")
 
 
+def get_lead_ticker(analysis: MarketImpactAnalysis) -> Optional[str]:
+    """Extract primary lead ticker for deduplication and grouping."""
+    if analysis.causal_chain and analysis.causal_chain.beneficiaries:
+        valid_b = [b.strip().upper() for b in analysis.causal_chain.beneficiaries if b and b.strip().upper() != "NONE"]
+        if valid_b:
+            return valid_b[0]
+    if analysis.causal_chain and analysis.causal_chain.negatively_exposed:
+        valid_n = [n.strip().upper() for n in analysis.causal_chain.negatively_exposed if n and n.strip().upper() != "NONE"]
+        if valid_n:
+            return valid_n[0]
+    if analysis.affected_tickers:
+        valid_t = [t.strip().upper() for t in analysis.affected_tickers if t and t.strip().upper() != "NONE"]
+        if valid_t:
+            return valid_t[0]
+    return None
+
+
+def unite_batch_opportunities(
+    items: List[Tuple[RawArticle, MarketImpactAnalysis]],
+) -> List[Tuple[RawArticle, MarketImpactAnalysis, List[Tuple[str, Optional[str]]]]]:
+    """Unite duplicate catalysts targeting the same primary stock within a batch push.
+
+    Collapses multiple reports for the same stock into a single high-conviction card,
+    merging their sources, secondary beneficiaries, and bullish sectors.
+    """
+    if not items:
+        return []
+
+    grouped: Dict[str, Dict[str, Any]] = {}
+    ordered_keys: List[str] = []
+
+    for art, ana in items:
+        lead = get_lead_ticker(ana)
+        key = lead if lead else f"anon_{id(art)}"
+        source_tuple = (art.source_name or "Source", art.url)
+
+        if key not in grouped:
+            ordered_keys.append(key)
+            grouped[key] = {
+                "article": art,
+                "analysis": ana,
+                "sources": [source_tuple],
+                "all_tickers": list(ana.affected_tickers or []),
+                "all_sectors": list(ana.affected_sectors or []),
+                "sector_trends": list(ana.sector_trends or []),
+            }
+        else:
+            entry = grouped[key]
+            # Merge sources (avoid exact duplicate urls)
+            if not any(s[1] == art.url for s in entry["sources"] if art.url):
+                entry["sources"].append(source_tuple)
+
+            # Keep highest score / most detailed analysis
+            curr_score = ana.confidence_score if ana.confidence_score is not None else 0
+            base_score = entry["analysis"].confidence_score if entry["analysis"].confidence_score is not None else 0
+            if curr_score > base_score:
+                entry["article"] = art
+                entry["analysis"] = ana
+
+            # Merge any additional affected tickers
+            existing_t_set = {t.upper() for t in entry["all_tickers"]}
+            for t in (ana.affected_tickers or []):
+                if t.upper() not in existing_t_set:
+                    entry["all_tickers"].append(t)
+                    existing_t_set.add(t.upper())
+
+            # Merge any additional sectors
+            existing_s_set = {s.lower() for s in entry["all_sectors"]}
+            for s in (ana.affected_sectors or []):
+                if s.lower() not in existing_s_set:
+                    entry["all_sectors"].append(s)
+                    existing_s_set.add(s.lower())
+
+            # Merge sector trends
+            existing_st_set = {st.sector.lower() for st in entry["sector_trends"]}
+            for st in (ana.sector_trends or []):
+                if st.sector.lower() not in existing_st_set:
+                    entry["sector_trends"].append(st)
+                    existing_st_set.add(st.sector.lower())
+
+    result = []
+    for k in ordered_keys:
+        e = grouped[k]
+        final_ana = e["analysis"]
+        final_ana.affected_tickers = e["all_tickers"]
+        final_ana.affected_sectors = e["all_sectors"]
+        final_ana.sector_trends = e["sector_trends"]
+        result.append((e["article"], final_ana, e["sources"]))
+
+    return result
+
+
 def format_batch_telegram_message(
     items: List[Tuple[RawArticle, MarketImpactAnalysis]],
     include_avoid: bool = False,
@@ -749,17 +853,24 @@ def format_batch_telegram_message(
     if not items:
         return ""
 
-    if len(items) == 1:
-        art, ana = items[0]
+    united_items = unite_batch_opportunities(items)
+    if len(united_items) == 1:
+        art, ana, extra_sources = united_items[0]
         score = ana.confidence_score if ana.confidence_score is not None else 0
         header = f"🚨 <b>MARKET OPPORTUNITY (Score: {score}/10)</b>\n"
-        body = format_clean_opportunity_item(art, ana, index=None, include_avoid=include_avoid)
+        body = format_clean_opportunity_item(
+            art, ana, index=None, include_avoid=include_avoid, sources=extra_sources
+        )
         return safe_truncate_html(f"{header}\n{body}")
 
-    header = f"🚨 <b>MARKET OPPORTUNITIES ({len(items)} In Focus)</b>\n"
+    header = f"🚨 <b>MARKET OPPORTUNITIES ({len(united_items)} In Focus)</b>\n"
     item_blocks = []
-    for idx, (art, ana) in enumerate(items, 1):
-        item_blocks.append(format_clean_opportunity_item(art, ana, index=idx, include_avoid=include_avoid))
+    for idx, (art, ana, extra_sources) in enumerate(united_items, 1):
+        item_blocks.append(
+            format_clean_opportunity_item(
+                art, ana, index=idx, include_avoid=include_avoid, sources=extra_sources
+            )
+        )
 
     separator = "\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
     content = header + "\n" + separator.join(item_blocks)

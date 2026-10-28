@@ -1162,6 +1162,69 @@ def test_detailed_telegram_message_includes_bullish_sectors():
     assert "🟢 <b>Bullish Sectors (≥0.55):</b> Energy (+0.72)" in msg
 
 
+def test_format_batch_telegram_message_unites_same_stock_across_sources():
+    from src.notification.telegram import format_batch_telegram_message
+
+    art1 = RawArticle(
+        title="Oracle eases investor capex concerns",
+        url="https://reuters.com/orcl-capex",
+        source_name="Reuters Live Wire",
+    )
+    ana1 = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=9,
+        impact_grade=ImpactGrade.HIGH,
+        affected_tickers=["$ORCL", "$NVDA"],
+        affected_sectors=["Semiconductors"],
+        summary="Oracle eases investor concerns over AI infrastructure capex.",
+        catalyst_thesis="Free cash flow reassurance.",
+    )
+
+    art2 = RawArticle(
+        title="Microsoft reports strong Azure cloud revenue beat",
+        url="https://bloomberg.com/msft-cloud",
+        source_name="Bloomberg Technology",
+    )
+    ana2 = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=10,
+        impact_grade=ImpactGrade.CRITICAL,
+        affected_tickers=["$MSFT"],
+        affected_sectors=["Cloud Computing"],
+        summary="Microsoft reports strong cloud revenue growth.",
+        catalyst_thesis="Azure revenue growth accelerates.",
+    )
+
+    art3 = RawArticle(
+        title="Oracle rallies 11% on $225B fiscal 2030 forecast",
+        url="https://cnbc.com/orcl-forecast",
+        source_name="CNBC Top News",
+    )
+    ana3 = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=10,
+        impact_grade=ImpactGrade.CRITICAL,
+        affected_tickers=["$ORCL"],
+        affected_sectors=["Enterprise Software"],
+        summary="Oracle rallies 11% after projecting fiscal 2030 revenue of $225B.",
+        catalyst_thesis="Capital allocation reassurance lowers cost of capital.",
+    )
+
+    # 3 items input: 2 are Oracle from different sources, 1 is Microsoft
+    msg = format_batch_telegram_message([(art1, ana1), (art2, ana2), (art3, ana3)])
+
+    # Should collapse into 2 in focus, NOT 3
+    assert "🚨 <b>MARKET OPPORTUNITIES (2 In Focus)</b>" in msg
+    assert "3. " not in msg
+    assert "$MSFT" in msg
+    assert "$ORCL" in msg
+
+    # Verify both sources for Oracle are unified in the card
+    assert "Reuters Live Wire" in msg
+    assert "CNBC Top News" in msg
+
+
+
 
 
 
