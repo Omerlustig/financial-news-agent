@@ -2,7 +2,12 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from src.models import EventLineageRecord, MarketImpactAnalysis, RawArticle
+from src.models import (
+    EventLineageRecord,
+    MarketImpactAnalysis,
+    RawArticle,
+    RecommendationRecord,
+)
 
 
 class BaseStorage(ABC):
@@ -145,6 +150,20 @@ class BaseStorage(ABC):
     def list_event_lineage(self, ticker: Optional[str] = None, limit: int = 20) -> List[EventLineageRecord]:
         """List recent event lineage tracking records, optionally filtered by primary ticker."""
         return []
+
+    def record_recommendation(self, record: RecommendationRecord) -> int:
+        """Persist an auditable recommendation record upon Telegram notification dispatch."""
+        return 0
+
+    def get_recommendations(
+        self, limit: int = 50, ticker: Optional[str] = None, status: Optional[str] = None
+    ) -> List[RecommendationRecord]:
+        """Retrieve recorded recommendations, optionally filtered by ticker or status."""
+        return []
+
+    def update_recommendation_price(self, rec_id: int, current_price: float, return_pct: float) -> None:
+        """Update realized latest price and return for a tracked recommendation."""
+        pass
 
     def close(self) -> None:
         """Release storage connections or system resources."""

@@ -966,20 +966,90 @@ def performance(
 
             def fetch_quote(sym: str) -> Optional[float]:
                 try:
-                    summary = tv_engine.get_technical_summary(sym)
+                    clean = sym[1:] if sym.startswith("$") else sym
+                    summary = tv_engine.get_technical_summary(clean)
                     return summary.close_price if summary else None
                 except Exception:
                     return None
 
             update_counts = engine.update_forward_returns(storage, price_fetcher=fetch_quote)
             total_upd = update_counts.get("updated_1d", 0) + update_counts.get("updated_7d", 0)
-            console.print(f"[bold green]✓ Updated {total_upd} forward return quote(s) ({update_counts.get('updated_1d', 0)} 1d, {update_counts.get('updated_7d', 0)} 7d).[/bold green]\n")
+
+            # Update tracked Telegram recommendations with latest live quotes
+            open_recs = storage.get_recommendations(limit=200, status="OPEN")
+            rec_upd_count = 0
+            for rec in open_recs:
+                curr_p = fetch_quote(rec.ticker)
+                if curr_p is not None and curr_p > 0:
+                    ret_pct = 0.0
+                    if rec.initial_price and rec.initial_price > 0:
+                        ret_pct = ((curr_p - rec.initial_price) / rec.initial_price) * 100.0
+                    storage.update_recommendation_price(rec.id, current_price=curr_p, return_pct=round(ret_pct, 2))
+                    rec_upd_count += 1
+
+            upd_msg = f"[bold green]✓ Updated {total_upd} forward return quote(s) ({update_counts.get('updated_1d', 0)} 1d, {update_counts.get('updated_7d', 0)} 7d)[/bold green]"
+            if rec_upd_count > 0:
+                upd_msg += f" [bold cyan]and {rec_upd_count} Telegram recommendation quote(s)[/bold cyan]"
+            console.print(f"{upd_msg}.\n")
+
+        # Telegram Buy Recommendations Ledger
+        telegram_recs = storage.get_recommendations(limit=50, ticker=ticker)
+
+        def print_telegram_recommendations_table() -> None:
+            if not telegram_recs:
+                return
+            rec_table = Table(title="📱 TELEGRAM BUY RECOMMENDATIONS TRACKING LEDGER")
+            rec_table.add_column("Date (UTC)", style="dim")
+            rec_table.add_column("Ticker", style="cyan bold", no_wrap=True)
+            rec_table.add_column("Action", justify="center", no_wrap=True)
+            rec_table.add_column("Score", justify="center")
+            rec_table.add_column("Rec Price", justify="right", no_wrap=True)
+            rec_table.add_column("Latest Price", justify="right", no_wrap=True)
+            rec_table.add_column("Return %", justify="right", no_wrap=True)
+            rec_table.add_column("Status", justify="center")
+            rec_table.add_column("Headline", style="bold")
+
+            for r in telegram_recs:
+                dt_str = r.recommended_at.strftime("%Y-%m-%d %H:%M") if r.recommended_at else "N/A"
+                act_str = "[bold green]BUY[/bold green]"
+                score_str = f"{r.confidence_score}/10"
+                if r.opportunity_score:
+                    score_str += f" (Opp: {r.opportunity_score:.1f})"
+                p_init = f"${r.initial_price:.2f}" if r.initial_price is not None else "N/A"
+                p_latest = f"${r.latest_price:.2f}" if r.latest_price is not None else "N/A"
+                if r.return_pct is not None:
+                    if r.return_pct > 0:
+                        ret_str = f"[bold green]{r.return_pct:+.2f}%[/bold green]"
+                    elif r.return_pct < 0:
+                        ret_str = f"[bold red]{r.return_pct:+.2f}%[/bold red]"
+                    else:
+                        ret_str = "[yellow]0.00%[/yellow]"
+                else:
+                    ret_str = "[dim]--[/dim]"
+
+                status_str = "[bold green]OPEN[/bold green]" if r.status == "OPEN" else f"[dim]{r.status}[/dim]"
+                head_str = r.headline[:45] + "..." if len(r.headline) > 45 else r.headline
+
+                rec_table.add_row(
+                    dt_str,
+                    r.ticker,
+                    act_str,
+                    score_str,
+                    p_init,
+                    p_latest,
+                    ret_str,
+                    status_str,
+                    head_str,
+                )
+            console.print()
+            console.print(rec_table)
 
         summary = engine.calculate_performance_metrics(
             storage, min_opportunity=min_opportunity, ticker=ticker, source=source
         )
 
         if summary.total_catalysts == 0:
+            print_telegram_recommendations_table()
             filter_msg = []
             if ticker:
                 filter_msg.append(f"ticker '{ticker}'")
@@ -1143,6 +1213,7 @@ def performance(
         console.print()
         console.print(ledger_table)
         console.print()
+        print_telegram_recommendations_table()
     finally:
         storage.close()
 
@@ -1330,6 +1401,7 @@ def push_pending(
             if delivered:
                 c.execute("UPDATE articles SET alerted = 1 WHERE content_hash = ?", (ch,))
                 conn.commit()
+                pipeline._record_delivered_recommendation(art, ana)
                 sent_count += 1
                 console.print("[bold green]✓ SENT & RECORDED[/bold green]")
             else:

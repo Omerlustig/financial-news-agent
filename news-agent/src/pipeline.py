@@ -18,6 +18,7 @@ from src.models import (
     CausalChain,
     HardGates,
     SurgeLevel,
+    RecommendationRecord,
 )
 from src.config import Settings, SourceConfig, WatchlistSettings, load_settings, load_sources
 from src.ingestion.rss import fetch_all_sources
@@ -449,6 +450,87 @@ class Pipeline:
                 return False
 
         return False
+
+    def _record_delivered_recommendation(
+        self, article: RawArticle, analysis: MarketImpactAnalysis
+    ) -> None:
+        """Persist individual recommendation tracking records for all buy beneficiaries upon Telegram alert delivery."""
+        if not self.storage or not hasattr(self.storage, "record_recommendation"):
+            return
+
+        # Determine target buy tickers
+        target_tickers: List[str] = []
+        if analysis.causal_chain and analysis.causal_chain.beneficiaries:
+            target_tickers.extend(analysis.causal_chain.beneficiaries)
+        elif analysis.directional_stance in (DirectionalStance.BULLISH, "BULLISH"):
+            target_tickers.extend(analysis.affected_tickers or getattr(analysis, "tickers", []))
+
+        if not target_tickers:
+            target_tickers.extend(analysis.affected_tickers or getattr(analysis, "tickers", []))
+
+        # Deduplicate while preserving order
+        seen_syms = set()
+        clean_tickers: List[str] = []
+        for t in target_tickers:
+            sym = str(t).strip().upper()
+            if not sym.startswith("$"):
+                sym = f"${sym}"
+            if sym not in seen_syms and len(sym) > 1:
+                seen_syms.add(sym)
+                clean_tickers.append(sym)
+
+        if not clean_tickers:
+            return
+
+        # Build price lookup map from technicals
+        price_map: Dict[str, float] = {}
+        if analysis.technicals:
+            for tech in analysis.technicals:
+                if tech.symbol and tech.close_price is not None:
+                    raw_s = str(tech.symbol).strip().upper()
+                    price_map[raw_s] = tech.close_price
+                    price_map[f"${raw_s}"] = tech.close_price
+                    if raw_s.startswith("$"):
+                        price_map[raw_s[1:]] = tech.close_price
+
+        # Helper to lazily fetch price if missing
+        tv_engine = None
+        for sym in clean_tickers:
+            initial_p = price_map.get(sym) or price_map.get(sym[1:])
+            if initial_p is None:
+                try:
+                    if tv_engine is None:
+                        from src.analysis.technical import TradingViewEngine
+                        tv_engine = TradingViewEngine()
+                    tech_sum = tv_engine.get_technical_summary(sym[1:] if sym.startswith("$") else sym)
+                    if tech_sum and tech_sum.close_price is not None:
+                        initial_p = tech_sum.close_price
+                except Exception as p_err:
+                    logger.debug("Failed live price lookup for recommendation %s: %s", sym, p_err)
+
+            opp_score = 0.0
+            if analysis.two_layer_gate and hasattr(analysis.two_layer_gate, "opportunity_score"):
+                opp_score = float(analysis.two_layer_gate.opportunity_score or 0.0)
+
+            rec_rec = RecommendationRecord(
+                recommended_at=datetime.now(timezone.utc),
+                ticker=sym,
+                action="BUY",
+                initial_price=initial_p,
+                confidence_score=analysis.confidence_score,
+                opportunity_score=opp_score,
+                headline=article.title,
+                source=article.source_name,
+                article_hash=article.content_hash,
+                event_id=analysis.event_id,
+                latest_price=initial_p,
+                return_pct=0.0 if initial_p is not None else None,
+                status="OPEN",
+            )
+            try:
+                self.storage.record_recommendation(rec_rec)
+            except Exception as rec_err:
+                logger.error("Failed recording recommendation for ticker %s: %s", sym, rec_err)
 
     def process_articles(self, articles: List[RawArticle]) -> CycleSummary:
         """Process a list of ingested articles through deduplication, analysis,
@@ -962,6 +1044,7 @@ class Pipeline:
 
                     if alert_delivered:
                         alerted_count += 1
+                        self._record_delivered_recommendation(canonical, analysis)
             else:
                 logger.info(
                     "Article '%s' (%s) routed to storage without alert (status=%s, score=%d, alerted=False).",
@@ -1041,6 +1124,7 @@ class Pipeline:
                         self.storage.record_article(art, ana, alerted=True)
                     except Exception as exc:
                         logger.error("Error updating alerted status for '%s': %s", art.title, exc)
+                    self._record_delivered_recommendation(art, ana)
 
         return CycleSummary(
             fetched=fetched_count,

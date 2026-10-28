@@ -6,7 +6,12 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from src.models import EventLineageRecord, MarketImpactAnalysis, RawArticle
+from src.models import (
+    EventLineageRecord,
+    MarketImpactAnalysis,
+    RawArticle,
+    RecommendationRecord,
+)
 from src.storage.base import BaseStorage
 
 
@@ -144,6 +149,26 @@ class SQLiteStorage(BaseStorage):
                     );
                     """
                 )
+                self._conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS recommendation_tracking (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        article_hash TEXT NOT NULL,
+                        event_id TEXT,
+                        recommended_at TIMESTAMP NOT NULL,
+                        ticker TEXT NOT NULL,
+                        action TEXT NOT NULL DEFAULT 'BUY',
+                        initial_price REAL,
+                        confidence_score INTEGER DEFAULT 0,
+                        opportunity_score REAL DEFAULT 0.0,
+                        headline TEXT NOT NULL,
+                        source TEXT,
+                        latest_price REAL,
+                        return_pct REAL,
+                        status TEXT DEFAULT 'OPEN'
+                    );
+                    """
+                )
                 # Migration safety check: ensure all newly specified columns exist in existing databases
                 cursor = self._conn.execute("PRAGMA table_info(articles);")
                 existing_cols = {row["name"] if isinstance(row, sqlite3.Row) else row[1] for row in cursor.fetchall()}
@@ -191,6 +216,10 @@ class SQLiteStorage(BaseStorage):
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_event_lineage_first_seen ON event_lineage(first_seen);")
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_event_lineage_last_updated ON event_lineage(last_updated);")
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_event_lineage_status ON event_lineage(status);")
+                self._conn.execute("CREATE INDEX IF NOT EXISTS idx_rec_tracking_ticker ON recommendation_tracking(ticker);")
+                self._conn.execute("CREATE INDEX IF NOT EXISTS idx_rec_tracking_recommended_at ON recommendation_tracking(recommended_at);")
+                self._conn.execute("CREATE INDEX IF NOT EXISTS idx_rec_tracking_status ON recommendation_tracking(status);")
+                self._conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_rec_tracking_unique_article_ticker ON recommendation_tracking(article_hash, ticker);")
 
     def is_article_seen(self, content_hash: str) -> bool:
         """Check whether an article with the given content hash has already been stored."""
@@ -1284,6 +1313,114 @@ class SQLiteStorage(BaseStorage):
                 cursor.execute(sql, (limit,))
             rows = cursor.fetchall()
             return [self._row_to_event_lineage(r) for r in rows]
+
+    def _row_to_recommendation(self, row: Any) -> RecommendationRecord:
+        d = dict(row)
+        return RecommendationRecord(
+            id=d.get("id"),
+            article_hash=d.get("article_hash", ""),
+            event_id=d.get("event_id"),
+            recommended_at=d.get("recommended_at"),
+            ticker=d.get("ticker", ""),
+            action=d.get("action", "BUY"),
+            initial_price=d.get("initial_price"),
+            confidence_score=d.get("confidence_score", 0),
+            opportunity_score=d.get("opportunity_score", 0.0),
+            headline=d.get("headline", ""),
+            source=d.get("source", "Unknown"),
+            latest_price=d.get("latest_price"),
+            return_pct=d.get("return_pct"),
+            status=d.get("status", "OPEN"),
+        )
+
+    def record_recommendation(self, record: RecommendationRecord) -> int:
+        """Persist an auditable recommendation record upon Telegram notification dispatch."""
+        if not record or not record.ticker:
+            return 0
+        with self._lock:
+            if self._conn is None:
+                raise RuntimeError("Database connection is closed.")
+            with self._conn:
+                rec_at_str = (
+                    record.recommended_at.isoformat()
+                    if record.recommended_at
+                    else datetime.now(timezone.utc).isoformat()
+                )
+                cursor = self._conn.execute(
+                    """
+                    INSERT INTO recommendation_tracking (
+                        article_hash, event_id, recommended_at, ticker, action,
+                        initial_price, confidence_score, opportunity_score,
+                        headline, source, latest_price, return_pct, status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(article_hash, ticker) DO UPDATE SET
+                        initial_price = COALESCE(excluded.initial_price, recommendation_tracking.initial_price),
+                        latest_price = COALESCE(excluded.latest_price, recommendation_tracking.latest_price),
+                        return_pct = COALESCE(excluded.return_pct, recommendation_tracking.return_pct);
+                    """,
+                    (
+                        record.article_hash,
+                        record.event_id,
+                        rec_at_str,
+                        record.ticker,
+                        record.action,
+                        record.initial_price,
+                        record.confidence_score,
+                        record.opportunity_score,
+                        record.headline,
+                        record.source,
+                        record.latest_price,
+                        record.return_pct,
+                        record.status,
+                    ),
+                )
+                if cursor.lastrowid:
+                    return int(cursor.lastrowid)
+                # If updated on conflict, fetch existing id
+                cur2 = self._conn.execute(
+                    "SELECT id FROM recommendation_tracking WHERE article_hash = ? AND ticker = ?;",
+                    (record.article_hash, record.ticker),
+                )
+                r2 = cur2.fetchone()
+                return int(r2[0]) if r2 else 0
+
+    def get_recommendations(
+        self, limit: int = 50, ticker: Optional[str] = None, status: Optional[str] = None
+    ) -> List[RecommendationRecord]:
+        """Retrieve recorded recommendations, optionally filtered by ticker or status."""
+        with self._lock:
+            if self._conn is None:
+                raise RuntimeError("Database connection is closed.")
+            query = "SELECT * FROM recommendation_tracking WHERE 1=1"
+            params: List[Any] = []
+            if ticker:
+                cl_t = ticker.strip().upper()
+                if not cl_t.startswith("$"):
+                    cl_t = f"${cl_t}"
+                query += " AND ticker = ?"
+                params.append(cl_t)
+            if status:
+                query += " AND status = ?"
+                params.append(status.strip().upper())
+            query += " ORDER BY recommended_at DESC LIMIT ?;"
+            params.append(limit)
+            cursor = self._conn.execute(query, tuple(params))
+            return [self._row_to_recommendation(r) for r in cursor.fetchall()]
+
+    def update_recommendation_price(self, rec_id: int, current_price: float, return_pct: float) -> None:
+        """Update realized latest price and return for a tracked recommendation."""
+        with self._lock:
+            if self._conn is None:
+                raise RuntimeError("Database connection is closed.")
+            with self._conn:
+                self._conn.execute(
+                    """
+                    UPDATE recommendation_tracking
+                    SET latest_price = ?, return_pct = ?
+                    WHERE id = ?;
+                    """,
+                    (current_price, return_pct, rec_id),
+                )
 
     def close(self) -> None:
 

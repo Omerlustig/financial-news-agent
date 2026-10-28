@@ -1039,3 +1039,48 @@ class MarketImpactAnalysis(BaseModel):
                     self.status = EventStatus.WATCHLIST
         return self
 
+
+class RecommendationRecord(BaseModel):
+    """Auditable recommendation record persisted when an alert is delivered to Telegram."""
+    id: Optional[int] = Field(default=None, description="Database unique record ID.")
+    recommended_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        description="UTC timestamp of the recommendation dispatch."
+    )
+    ticker: str = Field(..., description="Target ticker symbol (e.g. $NVDA).")
+    action: str = Field(default="BUY", description="Recommended action (e.g. BUY).")
+    initial_price: Optional[float] = Field(default=None, description="Asset price at recommendation dispatch time.")
+    confidence_score: int = Field(default=0, description="Analysis confidence score (1-10).")
+    opportunity_score: float = Field(default=0.0, description="Opportunity score (0-10).")
+    headline: str = Field(..., description="Article headline context.")
+    source: str = Field(default="Unknown", description="Source or publisher name.")
+    article_hash: str = Field(..., description="Content hash of triggering article.")
+    event_id: Optional[str] = Field(default=None, description="Event ID if clustered.")
+    latest_price: Optional[float] = Field(default=None, description="Most recent price check.")
+    return_pct: Optional[float] = Field(default=None, description="Realized percentage return since recommendation.")
+    status: str = Field(default="OPEN", description="Status of recommendation tracking (OPEN, RESOLVED).")
+
+    @field_validator("ticker", mode="before")
+    @classmethod
+    def normalize_rec_ticker(cls, v: Any) -> str:
+        if not v:
+            return ""
+        cleaned = str(v).strip().upper()
+        if cleaned and not cleaned.startswith("$"):
+            cleaned = f"${cleaned}"
+        return cleaned
+
+    @field_validator("recommended_at", mode="before")
+    @classmethod
+    def parse_recommended_at(cls, v: Any) -> datetime:
+        if isinstance(v, datetime):
+            return v if v.tzinfo else v.replace(tzinfo=timezone.utc)
+        if isinstance(v, str):
+            try:
+                dt = datetime.fromisoformat(v.replace("Z", "+00:00"))
+                return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+            except Exception:
+                pass
+        return datetime.now(timezone.utc)
+
+
