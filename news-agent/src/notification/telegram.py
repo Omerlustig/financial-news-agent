@@ -235,6 +235,60 @@ def get_simple_reason_for_exposed(ticker: str, analysis: MarketImpactAnalysis) -
     return "Because it faces margin pressure, rising supply costs, or operational headwinds."
 
 
+def truncate_at_word(text: str, max_length: int = 160) -> str:
+    """Truncate text cleanly at a word boundary with ellipsis if exceeding max_length."""
+    if not text:
+        return ""
+    cleaned = " ".join(text.split()).strip()
+    if len(cleaned) <= max_length:
+        return cleaned
+    truncated = cleaned[:max_length].rstrip()
+    last_space = truncated.rfind(" ")
+    if last_space > max_length // 2:
+        truncated = truncated[:last_space].rstrip(" ,;:-.")
+    return truncated + "..."
+
+
+def get_bullish_sectors(analysis: MarketImpactAnalysis, threshold: float = 0.55) -> List[str]:
+    """Return formatted strings of sectors exhibiting bullish sentiment score >= threshold.
+
+    Checks `analysis.sector_trends` first. If empty, falls back to `analysis.affected_sectors`
+    when `analysis.sentiment.score >= threshold`.
+    """
+    bullish: List[str] = []
+    seen = set()
+
+    # 1. From sector_trends (enrichment from storage 24h history)
+    if analysis.sector_trends:
+        for trend in analysis.sector_trends:
+            sec_name = (trend.sector or "").strip()
+            score = trend.avg_sentiment
+            if sec_name and sec_name.lower() not in seen and score is not None and score >= threshold:
+                seen.add(sec_name.lower())
+                bullish.append(f"{sec_name} (+{score:.2f})")
+
+    # 2. Fallback to affected_sectors with catalyst sentiment score
+    if not bullish:
+        sentiment_score = (
+            float(analysis.sentiment.score)
+            if analysis.sentiment and analysis.sentiment.score is not None
+            else None
+        )
+        if sentiment_score is not None and sentiment_score >= threshold:
+            raw_sectors = (
+                analysis.causal_chain.affected_sectors
+                if analysis.causal_chain and analysis.causal_chain.affected_sectors
+                else analysis.affected_sectors
+            ) or []
+            for sec in raw_sectors:
+                sec_name = str(sec).strip()
+                if sec_name and sec_name.lower() != "none" and sec_name.lower() not in seen:
+                    seen.add(sec_name.lower())
+                    bullish.append(f"{sec_name} (+{sentiment_score:.2f})")
+
+    return bullish
+
+
 def format_telegram_message(
     article: RawArticle,
     analysis: MarketImpactAnalysis,
@@ -324,6 +378,10 @@ def format_telegram_message(
         sectors = analysis.affected_sectors
     sectors_str = ", ".join(sectors) if sectors else "None"
     lines.append(f"🏭 <b>Sectors:</b> {escape_html(sectors_str)}")
+
+    bullish_sectors = get_bullish_sectors(analysis, threshold=0.55)
+    if bullish_sectors:
+        lines.append(f"🟢 <b>Bullish Sectors (≥0.55):</b> {escape_html(', '.join(bullish_sectors))}")
 
     # SEC / TASE Regulatory Disclosure
     if getattr(analysis, "sec_filing_item", None):
@@ -561,21 +619,10 @@ def format_clean_opportunity_item(
 ) -> str:
     """Formats a single investment opportunity into a clean, focused, zero-noise summary block."""
     score = analysis.confidence_score if analysis.confidence_score is not None else 0
-    grade = (
-        getattr(analysis.impact_grade, "value", str(analysis.impact_grade)).upper()
-        if analysis.impact_grade
-        else "HIGH"
-    )
 
-    # Directional icon & stance
+    # Directional stance
     stance = getattr(analysis, "directional_stance", None)
     stance_val = getattr(stance, "value", str(stance)).strip().upper() if stance else "NEUTRAL"
-    if any(w in stance_val for w in ["BEAR", "DOWN", "NEG", "SHORT"]):
-        stance_icon = "🔴"
-    elif any(w in stance_val for w in ["VOLATILE"]):
-        stance_icon = "⚡"
-    else:
-        stance_icon = "🟢"
 
     # Tickers & Sectors
     sectors_list: List[str] = []
@@ -583,7 +630,6 @@ def format_clean_opportunity_item(
         sectors_list = analysis.causal_chain.affected_sectors
     elif analysis.affected_sectors:
         sectors_list = analysis.affected_sectors
-    sectors_str = ", ".join(sectors_list) if sectors_list else "Equities"
 
     beneficiaries: List[str] = []
     negatively_exposed: List[str] = []
@@ -596,77 +642,78 @@ def format_clean_opportunity_item(
         else:
             beneficiaries = analysis.affected_tickers or []
 
-    primary_tickers = ", ".join(beneficiaries if beneficiaries else (negatively_exposed if negatively_exposed else (analysis.affected_tickers or [])))
-    if not primary_tickers:
-        primary_tickers = sectors_str
+    # Action header & leading decision
+    if include_avoid and negatively_exposed and not beneficiaries:
+        action_header = f"🔴 AVOID {', '.join(negatively_exposed)}"
+    elif beneficiaries:
+        action_header = f"🟢 BUY {', '.join(beneficiaries)}"
+        if include_avoid and negatively_exposed:
+            action_header += f" | 🔴 AVOID {', '.join(negatively_exposed)}"
+    elif negatively_exposed:
+        action_header = f"🔴 AVOID {', '.join(negatively_exposed)}"
+    else:
+        primary_list = analysis.affected_tickers or []
+        if "BEAR" in stance_val:
+            action_header = f"🔴 AVOID {', '.join(primary_list)}" if primary_list else "🔴 AVOID"
+        else:
+            action_header = f"🟢 BUY {', '.join(primary_list)}" if primary_list else "🟢 BUY"
+
+    primary_sector = ""
+    if sectors_list:
+        valid_sectors = [s for s in sectors_list if s and s.strip().lower() != "none"]
+        if valid_sectors:
+            primary_sector = valid_sectors[0].strip()
 
     prefix = f"{index}. " if index is not None else ""
-    header = f"<b>{prefix}{escape_html(primary_tickers)} | {stance_icon} {escape_html(sectors_str)} | Score: {score}/10 ({escape_html(grade)})</b>"
+    if primary_sector:
+        header = f"<b>{prefix}{action_header} (Score: {score}/10) | {escape_html(primary_sector)}</b>"
+    else:
+        header = f"<b>{prefix}{action_header} (Score: {score}/10)</b>"
 
-    # Event facts (short catalyst)
+    lines = [header]
+
+    # 1. Catalyst (What happened)
     catalyst_text = analysis.summary
     if not catalyst_text and analysis.causal_chain and analysis.causal_chain.event_facts:
         catalyst_text = analysis.causal_chain.event_facts
     if not catalyst_text:
         catalyst_text = article.title
-    catalyst_text = catalyst_text.strip()
-    if len(catalyst_text) > 180:
-        catalyst_text = catalyst_text[:177] + "..."
+    if catalyst_text:
+        clean_cat = truncate_at_word(catalyst_text, max_length=160)
+        lines.append(f"• <b>Catalyst:</b> {escape_html(clean_cat)}")
 
-    lines = [header]
-    lines.append(f"• <b>Catalyst:</b> {escape_html(catalyst_text)}")
-
-    # Behind the lines (subtext)
-    subtext = getattr(analysis, "subtext_analysis", None)
-    if subtext:
-        subtext = subtext.strip()
-        if len(subtext) > 200:
-            subtext = subtext[:197] + "..."
-        lines.append(f"• <b>Behind The Lines:</b> {escape_html(subtext)}")
-
-    # Why it matters (economic transmission mechanism)
-    mechanism = None
+    # 2. Edge (Why it matters / Economic transmission mechanism)
+    edge_text = None
     if analysis.causal_chain and analysis.causal_chain.economic_mechanism:
-        mechanism = analysis.causal_chain.economic_mechanism.strip()
+        edge_text = analysis.causal_chain.economic_mechanism.strip()
     elif analysis.catalyst_thesis:
-        mechanism = analysis.catalyst_thesis.strip()
+        edge_text = analysis.catalyst_thesis.strip()
+    elif getattr(analysis, "subtext_analysis", None):
+        edge_text = analysis.subtext_analysis.strip()
 
-    if mechanism and mechanism.lower() != catalyst_text.lower():
-        if not subtext or mechanism.lower() != subtext.lower():
-            if len(mechanism) > 180:
-                mechanism = mechanism[:177] + "..."
-            lines.append(f"• <b>Why It Matters:</b> {escape_html(mechanism)}")
+    if edge_text and edge_text.lower() != (catalyst_text or "").lower():
+        clean_edge = truncate_at_word(edge_text, max_length=160)
+        lines.append(f"• <b>Edge:</b> {escape_html(clean_edge)}")
 
-    # Actionable positioning (Buy vs Avoid/Hedge)
-    action_parts: List[str] = []
-    if beneficiaries:
-        action_parts.append(f"🟢 <b>Buy:</b> {', '.join(beneficiaries)}")
-    if include_avoid and negatively_exposed:
-        action_parts.append(f"🔴 <b>Avoid/Hedge:</b> {', '.join(negatively_exposed)}")
-    if action_parts:
-        lines.append(f"• <b>Action:</b> {' | '.join(action_parts)}")
-    elif getattr(analysis, "recommendation", None):
-        rec = str(analysis.recommendation).strip()
-        if len(rec) > 150:
-            rec = rec[:147] + "..."
-        lines.append(f"• <b>Action:</b> {escape_html(rec)}")
+    # 3. Bullish Sectors (sentiment score >= 0.55)
+    bullish_sectors = get_bullish_sectors(analysis, threshold=0.55)
+    if bullish_sectors:
+        lines.append(f"• <b>Bullish Sectors:</b> 🟢 {escape_html(', '.join(bullish_sectors))}")
 
-    # Risk & Invalidation
-    invalidation = None
+    # 4. Risk / Invalidation
+    risk_text = None
     if analysis.causal_chain and analysis.causal_chain.invalidation_conditions and analysis.causal_chain.invalidation_conditions != "None":
-        invalidation = analysis.causal_chain.invalidation_conditions
+        risk_text = analysis.causal_chain.invalidation_conditions
     elif getattr(analysis, "adversarial_review", None) and analysis.adversarial_review.falsification_threshold:
-        invalidation = analysis.adversarial_review.falsification_threshold
+        risk_text = analysis.adversarial_review.falsification_threshold
     elif analysis.causal_chain and analysis.causal_chain.counterarguments and analysis.causal_chain.counterarguments != "None":
-        invalidation = analysis.causal_chain.counterarguments
+        risk_text = analysis.causal_chain.counterarguments
 
-    if invalidation:
-        invalidation = str(invalidation).strip()
-        if len(invalidation) > 180:
-            invalidation = invalidation[:177] + "..."
-        lines.append(f"• <b>Risk / Invalidation:</b> {escape_html(invalidation)}")
+    if risk_text:
+        clean_risk = truncate_at_word(str(risk_text), max_length=140)
+        lines.append(f"• <b>Risk:</b> {escape_html(clean_risk)}")
 
-    # Source Link
+    # 5. Source Link
     source_name = article.source_name or "Source"
     if article.url:
         lines.append(f"🔗 <a href=\"{article.url}\">{escape_html(source_name)}</a>")
@@ -850,7 +897,7 @@ class TelegramNotifier(BaseNotifier):
             "chat_id": self.chat_id,
             "text": text,
             "parse_mode": self.parse_mode,
-            "disable_web_page_preview": False,
+            "disable_web_page_preview": True,
         }
         if reply_markup is not None:
             payload["reply_markup"] = reply_markup

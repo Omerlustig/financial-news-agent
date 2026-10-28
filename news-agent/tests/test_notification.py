@@ -206,6 +206,7 @@ def test_telegram_send_alert_success():
         assert success is True
 
         mock_post.assert_called_once()
+        assert mock_post.call_args[1]["json"]["disable_web_page_preview"] is True
         call_kwargs = mock_post.call_args[1]
         assert call_kwargs["timeout"] == 10
         assert "api.telegram.org/botfake_token/sendMessage" in mock_post.call_args[0][0]
@@ -947,18 +948,15 @@ def test_format_batch_telegram_message_single():
 
     msg = format_batch_telegram_message([(art, ana)])
     assert "🚨 <b>MARKET OPPORTUNITY (Score: 8/10)</b>" in msg
-    assert "Score: 8/10 (HIGH)" in msg
-    assert "$XOM, $CVX, $XLE" in msg
+    assert "🟢 BUY $XOM, $CVX, $XLE (Score: 8/10) | Energy" in msg
     assert "• <b>Catalyst:</b>" in msg
-    assert "• <b>Behind The Lines:</b> Escalation risk premium pricing in" in msg
-    assert "• <b>Action:</b> 🟢 <b>Buy:</b> $XOM, $CVX, $XLE" in msg
-    assert "Avoid/Hedge" not in msg
-    assert "• <b>Risk / Invalidation:</b> Crude drops below $75/bbl" in msg
+    assert "• <b>Edge:</b> Crude price surge expands upstream E&amp;P margins." in msg
+    assert "• <b>Risk:</b> Crude drops below $75/bbl or shipping guarantees restored." in msg
     assert '<a href="https://reuters.com/world/middle-east/iran-strikes">Reuters</a>' in msg
 
     # Verify include_avoid=True opt-in behavior
     msg_with_avoid = format_batch_telegram_message([(art, ana)], include_avoid=True)
-    assert "🔴 <b>Avoid/Hedge:</b> $DAL, $UAL, $JETS" in msg_with_avoid
+    assert "🔴 AVOID $DAL, $UAL, $JETS" in msg_with_avoid
 
 
 def test_format_batch_telegram_message_multiple():
@@ -1017,9 +1015,9 @@ def test_format_batch_telegram_message_multiple():
     msg = format_batch_telegram_message([(art1, ana1), (art2, ana2)])
     assert "🚨 <b>MARKET OPPORTUNITIES (2 In Focus)</b>" in msg
     assert "━━━━━━━━━━━━━━━━━━━━━━━━━━" in msg
-    assert "1. $XOM, $CVX | 🟢 Energy | Score: 8/10 (HIGH)" in msg
-    assert "2. $TSLA | 🔴 Automotive | Score: 7/10 (HIGH)" in msg
-    assert "• <b>Behind The Lines:</b>" in msg
+    assert "1. 🟢 BUY $XOM, $CVX (Score: 8/10) | Energy" in msg
+    assert "2. 🟢 BUY $TSLA (Score: 7/10) | Automotive" in msg
+    assert "• <b>Edge:</b>" in msg
     assert "Seeking Alpha" in msg
     assert "Reuters" in msg
 
@@ -1042,6 +1040,128 @@ def test_telegram_send_batch_alerts_dispatches_single_push():
     assert notifier.send_message.call_count == 1
     sent_text = notifier.send_message.call_args[0][0]
     assert "MARKET OPPORTUNITIES (2 In Focus)" in sent_text
+
+
+def test_telegram_alert_includes_bullish_sectors_from_sector_trends():
+    from src.models import SectorTrendMetrics
+    from src.notification.telegram import format_clean_opportunity_item, format_clean_telegram_message
+
+    article = RawArticle(
+        title="Nvidia announces breakthrough in Blackwell GPUs",
+        url="https://cnbc.com/nvda",
+        source_name="CNBC",
+        published_at=datetime(2026, 10, 28, 10, 0, tzinfo=timezone.utc),
+    )
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=9,
+        impact_grade=ImpactGrade.CRITICAL,
+        affected_tickers=["$NVDA"],
+        affected_sectors=["Semiconductors", "Automotive"],
+        summary="Nvidia Blackwell demand surges beyond expectation.",
+        catalyst_thesis="Strong pricing power and margin expansion.",
+        sector_trends=[
+            SectorTrendMetrics(
+                sector="Semiconductors",
+                avg_sentiment=0.68,
+                sentiment_label=SentimentLabel.VERY_BULLISH,
+            ),
+            SectorTrendMetrics(
+                sector="Automotive",
+                avg_sentiment=0.35,
+                sentiment_label=SentimentLabel.BULLISH,
+            ),
+        ],
+    )
+
+    msg = format_clean_telegram_message(article, analysis)
+    assert "• <b>Bullish Sectors:</b> 🟢 Semiconductors (+0.68)" in msg
+    assert "Automotive" not in msg.split("Bullish Sectors:")[1].split("\n")[0]
+
+
+def test_telegram_alert_omits_bullish_sectors_when_below_threshold():
+    from src.models import SectorTrendMetrics
+    from src.notification.telegram import format_clean_telegram_message
+
+    article = RawArticle(
+        title="Retail sales tick slightly higher",
+        url="https://reuters.com/retail",
+        source_name="Reuters",
+    )
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=6,
+        impact_grade=ImpactGrade.AVERAGE,
+        affected_tickers=["$WMT"],
+        affected_sectors=["Consumer Staples"],
+        summary="Consumer staples show mild uptick.",
+        catalyst_thesis="Inflation moderation.",
+        sector_trends=[
+            SectorTrendMetrics(
+                sector="Consumer Staples",
+                avg_sentiment=0.42,
+                sentiment_label=SentimentLabel.BULLISH,
+            )
+        ],
+    )
+
+    msg = format_clean_telegram_message(article, analysis)
+    assert "Bullish Sectors" not in msg
+
+
+def test_telegram_alert_bullish_sectors_fallback_from_catalyst_sentiment():
+    from src.notification.telegram import format_clean_telegram_message
+
+    article = RawArticle(
+        title="Major aerospace defense contract awarded",
+        url="https://defense.gov/contract",
+        source_name="DoD",
+    )
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=9,
+        impact_grade=ImpactGrade.CRITICAL,
+        affected_tickers=["$LMT"],
+        affected_sectors=["Aerospace & Defense"],
+        summary="Defense budget expands procurement.",
+        catalyst_thesis="Direct revenue surge.",
+        sector_trends=[],  # Not yet populated
+        sentiment=SentimentScore(score=0.65, label=SentimentLabel.VERY_BULLISH),
+    )
+
+    msg = format_clean_telegram_message(article, analysis)
+    assert "• <b>Bullish Sectors:</b> 🟢 Aerospace &amp; Defense (+0.65)" in msg
+
+
+def test_detailed_telegram_message_includes_bullish_sectors():
+    from src.models import SectorTrendMetrics
+
+    article = RawArticle(
+        title="Energy supply crunch hits European power plants",
+        url="https://ft.com/energy",
+        source_name="Financial Times",
+    )
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=8,
+        impact_grade=ImpactGrade.HIGH,
+        affected_tickers=["$XOM"],
+        affected_sectors=["Energy"],
+        summary="Crude and natural gas prices surge.",
+        catalyst_thesis="Refining margins expand rapidly.",
+        sector_trends=[
+            SectorTrendMetrics(
+                sector="Energy",
+                avg_sentiment=0.72,
+                sentiment_label=SentimentLabel.VERY_BULLISH,
+            )
+        ],
+    )
+
+    msg = format_telegram_message(article, analysis)
+    assert "🟢 <b>Bullish Sectors (≥0.55):</b> Energy (+0.72)" in msg
+
+
 
 
 
