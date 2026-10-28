@@ -6,7 +6,7 @@ sources:
   - name: "Reuters Business"
     type: "rss"
     url: "https://feeds.feedburner.com/reuters/businessNews"
-    enabled: true
+    enabled: false
 
   - name: "Reuters Live Wire"
     type: "rss"
@@ -16,6 +16,36 @@ sources:
   - name: "Seeking Alpha Market News"
     type: "rss"
     url: "https://seekingalpha.com/market_currents.xml"
+    enabled: true
+
+  - name: "MarketWatch Bulletins"
+    type: "rss"
+    url: "https://feeds.content.dowjones.io/public/rss/mw_bulletins"
+    enabled: true
+
+  - name: "MarketWatch Top Stories"
+    type: "rss"
+    url: "https://feeds.content.dowjones.io/public/rss/mw_topstories"
+    enabled: true
+
+  - name: "Investing.com News"
+    type: "rss"
+    url: "https://www.investing.com/rss/news.rss"
+    enabled: true
+
+  - name: "Investing.com Tech"
+    type: "rss"
+    url: "https://www.investing.com/rss/news_25.rss"
+    enabled: true
+
+  - name: "Investing.com Israel"
+    type: "rss"
+    url: "https://news.google.com/rss/search?q=site:il.investing.com&hl=iw&gl=IL&ceid=IL:iw"
+    enabled: true
+
+  - name: "Google News Business"
+    type: "rss"
+    url: "https://news.google.com/rss/headlines/section/topic/BUSINESS?hl=en-US&gl=US&ceid=US:en"
     enabled: true
 
   - name: "FinURLs Aggregator"
@@ -59,7 +89,7 @@ sources:
     type: "rss"
     url: "https://www.bloomberg.com/feeds/politics/news.rss"
     fallback_url: "https://feeds.bloomberg.com/politics/news.rss"
-    enabled: true
+    enabled: false
 
   - name: "Bloomberg Technology"
     type: "rss"
@@ -79,39 +109,35 @@ sources:
     fallback_url: "https://news.google.com/rss/search?q=site:bloomberg.com/europe+OR+site:bloomberg.com/news+when:2d&hl=en-US&gl=US&ceid=US:en"
     enabled: true
 
-  - name: "MarketWatch Top Stories"
-    type: "rss"
-    url: "https://feeds.content.dowjones.io/public/rss/mw_topstories"
-    enabled: true
-
-  - name: "Investing.com News"
-    type: "rss"
-    url: "https://www.investing.com/rss/news.rss"
-    enabled: true
-
   - name: "Stock Titan Real-Time"
     type: "rss"
     url: "https://www.stocktitan.net/rss"
-    enabled: true
+    enabled: false
 
   - name: "Associated Press Business"
     type: "rss"
     url: "https://news.google.com/rss/search?q=%22Associated+Press%22+business+when:3d&hl=en-US&gl=US&ceid=US:en"
-    enabled: true
+    enabled: false
 
   - name: "Investors Business Daily"
     type: "rss"
     url: "https://www.investors.com/feed/"
-    enabled: true
+    enabled: false
 
   - name: "New York Times Business"
     type: "rss"
     url: "https://rss.nytimes.com/services/xml/rss/nyt/Business.xml"
-    enabled: true
+    enabled: false
 
   - name: "BBC Business"
     type: "rss"
     url: "http://feeds.bbci.co.uk/news/business/rss.xml"
+    enabled: false
+
+  # US Primary & Specialist Sources
+  - name: "Federal Reserve Monetary Policy"
+    type: "rss"
+    url: "https://www.federalreserve.gov/feeds/press_all.xml"
     enabled: true
 
   # US Primary & Specialist Sources
@@ -146,6 +172,16 @@ sources:
     url: "https://news.google.com/rss/search?q=site:calcalist.co.il&hl=he&gl=IL&ceid=IL:he"
     enabled: true
 
+  - name: "TheMarker News"
+    type: "rss"
+    url: "https://www.themarker.com/srv/tm-news"
+    enabled: true
+
+  - name: "TheMarker All Articles"
+    type: "rss"
+    url: "https://www.themarker.com/srv/tm-all-articles"
+    enabled: true
+
   - name: "TheMarker"
     type: "rss"
     url: "https://news.google.com/rss/search?q=site:themarker.com&hl=he&gl=IL&ceid=IL:he"
@@ -164,7 +200,7 @@ sources:
   - name: "i24NEWS English"
     type: "rss"
     url: "https://news.google.com/rss/search?q=site:i24news.tv/en&hl=en-US&gl=US&ceid=US:en"
-    enabled: true
+    enabled: false
 
   - name: "TASE Market Announcements"
     type: "rss"
@@ -179,7 +215,7 @@ sources:
   - name: "Walla Finance"
     type: "rss"
     url: "https://rss.walla.co.il/feed/557"
-    enabled: true
+    enabled: false
 
   - name: "Calcalist CTech English"
     type: "rss"
@@ -189,6 +225,11 @@ sources:
   - name: "ICE Finance"
     type: "rss"
     url: "https://www.ice.co.il/rss"
+    enabled: false
+
+  - name: "Sponser Direct"
+    type: "rss"
+    url: "http://www.sponser.co.il/Content_rss_articles.aspx?CatId=7"
     enabled: true
 
   - name: "Sponser Capital Markets"
@@ -204,7 +245,7 @@ sources:
   - name: "N12 Money"
     type: "rss"
     url: "https://news.google.com/rss/search?q=site:mako.co.il/news-money+when:7d&hl=he&gl=IL&ceid=IL:he"
-    enabled: true
+    enabled: false
   - name: "Benzinga Latest"
     type: "rss"
     url: "https://www.benzinga.com/latest?page=1&feed=rss"
