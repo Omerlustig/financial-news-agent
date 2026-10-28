@@ -116,6 +116,12 @@ class ArticleBodyExtractor:
             logger.debug("Skipping full-text extraction for non-HTML URL: %s", url)
             return None
 
+        # Guardrail: Check domain rate-limit cooldown
+        from src.ingestion.base import DomainCooldownTracker
+        if DomainCooldownTracker.is_cooling_down(url):
+            logger.debug("Skipping full-text extraction for %s: domain is in cooldown", url)
+            return None
+
         text: Optional[str] = None
 
         # Primary extraction: Trafilatura (if available)
@@ -203,8 +209,25 @@ class ArticleBodyExtractor:
 
     def _requests_fallback(self, url: str, timeout: float) -> Optional[str]:
         """Fallback extractor using requests and BeautifulSoup/regex."""
+        from src.ingestion.base import DomainCooldownTracker, parse_retry_after
+
+        if DomainCooldownTracker.is_cooling_down(url):
+            logger.debug("Skipping fallback extraction for %s: host is in cooldown", url)
+            return None
+
         headers = {"User-Agent": self.user_agent}
-        response = requests.get(url, headers=headers, timeout=timeout)
+        try:
+            response = requests.get(url, headers=headers, timeout=timeout)
+        except Exception as exc:
+            logger.debug("Fallback request to %s raised %s", url, exc)
+            return None
+
+        if response.status_code == 429:
+            retry_after = parse_retry_after(response, default=30.0)
+            DomainCooldownTracker.set_cooldown(url, seconds=retry_after)
+            logger.warning("HTTP 429 when extracting article from %s. Domain cooling down for %.1fs.", url, retry_after)
+            return None
+
         if response.status_code != 200:
             logger.debug("Fallback request to %s returned HTTP %d", url, response.status_code)
             return None

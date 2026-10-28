@@ -704,6 +704,102 @@ def test_rss_fetcher_automatic_domain_fallback_for_benzinga():
         assert articles[0].title == "Benzinga Auto Headline"
 
 
+def test_rss_fetcher_respects_retry_after_header_on_429():
+    from unittest.mock import MagicMock
+    from src.ingestion.rss import DomainCooldownTracker
+
+    DomainCooldownTracker.clear()
+    src = SourceConfig(
+        name="Throttled Feed",
+        type="rss",
+        url="https://throttled-news.com/feed.xml",
+        enabled=True,
+    )
+
+    mock_storage = MagicMock()
+    mock_storage.get_feed_cache.return_value = (None, None)
+    fetcher = RSSFetcher(src, storage=mock_storage, max_retries=2, retry_backoff=1.0)
+    mock_resp_429 = MagicMock()
+    mock_resp_429.status_code = 429
+    mock_resp_429.headers = {"Retry-After": "4"}
+
+    mock_resp_200 = MagicMock()
+    mock_resp_200.status_code = 200
+    mock_resp_200.headers = {}
+    mock_resp_200.content = b"""<rss version="2.0"><channel><item><title>Success</title><link>https://throttled-news.com/1</link></item></channel></rss>"""
+
+    with patch("requests.get", side_effect=[mock_resp_429, mock_resp_200]) as mock_get, \
+         patch("time.sleep") as mock_sleep:
+        articles = fetcher.fetch()
+        assert len(articles) == 1
+        assert articles[0].title == "Success"
+        assert mock_get.call_count == 2
+        # Assert sleep called with ~4 seconds (respecting Retry-After: 4 with jitter)
+        assert mock_sleep.call_count >= 1
+        first_sleep = mock_sleep.call_args_list[0][0][0]
+        assert 3.0 <= first_sleep <= 5.5
+
+
+def test_rss_fetcher_domain_cooldown_skips_throttled_host():
+    from unittest.mock import MagicMock
+    from src.ingestion.rss import DomainCooldownTracker, fetch_all_sources
+
+    DomainCooldownTracker.clear()
+
+    src1 = SourceConfig(
+        name="Google News Topic 1",
+        type="rss",
+        url="https://news.google.com/rss/search?q=chips",
+        enabled=True,
+    )
+    src2 = SourceConfig(
+        name="Google News Topic 2",
+        type="rss",
+        url="https://news.google.com/rss/search?q=ai",
+        enabled=True,
+    )
+    src3 = SourceConfig(
+        name="CNBC Markets",
+        type="rss",
+        url="https://www.cnbc.com/rss/markets.xml",
+        enabled=True,
+    )
+
+    resp_429 = MagicMock()
+    resp_429.status_code = 429
+    resp_429.headers = {"Retry-After": "20"}
+
+    resp_200_cnbc = MagicMock()
+    resp_200_cnbc.status_code = 200
+    resp_200_cnbc.headers = {}
+    resp_200_cnbc.content = b"""<rss version="2.0"><channel><item><title>CNBC Win</title><link>https://cnbc.com/1</link></item></channel></rss>"""
+
+    def mock_get(url, **kwargs):
+        if "news.google.com" in url:
+            return resp_429
+        return resp_200_cnbc
+
+    mock_storage = MagicMock()
+    mock_storage.get_feed_cache.return_value = (None, None)
+
+    with patch("requests.get", side_effect=mock_get) as mock_get_call, \
+         patch("time.sleep"):
+        articles = fetch_all_sources([src1, src2, src3], storage=mock_storage, max_retries=1)
+
+        # src1 triggers 429 on news.google.com and activates domain cooldown
+        # src2 should be skipped entirely by domain cooldown WITHOUT calling requests.get!
+        # src3 (cnbc.com) should execute and succeed!
+        assert len(articles) == 1
+        assert articles[0].title == "CNBC Win"
+
+        # Verify news.google.com was only called for src1, NOT for src2
+        urls_called = [call[0][0] for call in mock_get_call.call_args_list]
+        google_calls = [u for u in urls_called if "news.google.com" in u]
+        assert len(google_calls) == 1  # src2 was skipped!
+        assert any("cnbc.com" in u for u in urls_called)
+
+
+
 
 
 

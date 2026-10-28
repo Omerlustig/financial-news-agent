@@ -323,3 +323,19 @@ def test_fetch_all_sources_forwards_extract_full_body():
         mock_fetcher_cls.assert_called_once()
         _, kwargs = mock_fetcher_cls.call_args
         assert kwargs.get("extract_full_body") is True
+
+
+def test_extractor_skips_cooling_down_domain():
+    """Verify ArticleBodyExtractor skips fetching when domain is marked in rate-limit cooldown."""
+    from src.ingestion.base import DomainCooldownTracker
+    from src.ingestion.extractor import ArticleBodyExtractor
+
+    DomainCooldownTracker.clear()
+    DomainCooldownTracker.set_cooldown("https://bloomberg.com/news/1", seconds=60.0)
+
+    extractor = ArticleBodyExtractor()
+    with patch("requests.get") as mock_get:
+        result = extractor.extract_full_text("https://bloomberg.com/news/article-abc")
+        assert result is None
+        mock_get.assert_not_called()
+

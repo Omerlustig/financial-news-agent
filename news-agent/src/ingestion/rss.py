@@ -3,10 +3,12 @@ from datetime import datetime, timezone
 import email.utils
 import html
 import logging
+import random
 import re
 import socket
 import time
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+import urllib.parse
 import feedparser
 import requests
 
@@ -16,7 +18,12 @@ except ImportError:
     dateutil_parser = None
 
 from src.config import SourceConfig
-from src.ingestion.base import BaseFetcher
+from src.ingestion.base import (
+    BaseFetcher,
+    DomainCooldownTracker,
+    parse_retry_after,
+    calculate_backoff,
+)
 from src.ingestion.extractor import ArticleBodyExtractor
 from src.models import RawArticle
 from src.storage.base import BaseStorage
@@ -159,13 +166,24 @@ class RSSFetcher(BaseFetcher):
         self.extract_full_body = extract_full_body
 
     def _fetch_parsed(self, fetch_url: str) -> Tuple[Optional[Any], bool, Optional[bytes]]:
-        """Fetch and parse feed data from fetch_url with ETag caching and retries.
+        """Fetch and parse feed data from fetch_url with ETag caching, rate-limit cooldown, and retries.
 
         Returns:
             Tuple[Optional[Any], bool, Optional[bytes]]: (parsed_feed, is_304, raw_bytes)
         """
         parsed = None
         raw_bytes: Optional[bytes] = None
+
+        if DomainCooldownTracker.is_cooling_down(fetch_url):
+            remaining = DomainCooldownTracker.get_remaining_cooldown(fetch_url)
+            logger.warning(
+                "Host '%s' is in rate-limit cooldown (%.1fs remaining); skipping feed '%s' (%s)",
+                DomainCooldownTracker.get_host(fetch_url),
+                remaining,
+                self.source_config.name,
+                fetch_url,
+            )
+            return None, False, None
 
         if (
             self.storage is not None
@@ -174,6 +192,7 @@ class RSSFetcher(BaseFetcher):
             and fetch_url.startswith(("http://", "https://"))
         ):
             cached_etag, cached_last_modified = self.storage.get_feed_cache(fetch_url)
+
             headers = {
                 "User-Agent": self.user_agent,
                 "Accept": "application/rss+xml, application/xml, text/xml, */*",
@@ -203,8 +222,32 @@ class RSSFetcher(BaseFetcher):
                         if self.storage is not None:
                             self.storage.set_feed_cache(fetch_url, new_etag, new_last_modified)
                         return parsed, False, raw_bytes
-                    elif response.status_code in (500, 502, 503, 504, 429) and attempt < self.max_retries:
-                        sleep_time = self.retry_backoff * (2 ** (attempt - 1))
+                    elif response.status_code == 429:
+                        retry_after = parse_retry_after(response, default=30.0)
+                        DomainCooldownTracker.set_cooldown(fetch_url, seconds=retry_after)
+                        if attempt < self.max_retries:
+                            sleep_time = calculate_backoff(attempt, self.retry_backoff, retry_after=retry_after)
+                            logger.warning(
+                                "Rate limit HTTP 429 from '%s' (%s). Retrying %d/%d after %.1fs (host cooldown set)...",
+                                self.source_config.name,
+                                fetch_url,
+                                attempt + 1,
+                                self.max_retries,
+                                sleep_time,
+                            )
+                            time.sleep(sleep_time)
+                            continue
+                        else:
+                            logger.warning(
+                                "HTTP 429 rate limit exceeded on '%s' (%s) after %d retries. Host marked in cooldown.",
+                                self.source_config.name,
+                                fetch_url,
+                                self.max_retries,
+                            )
+                            return None, False, None
+                    elif response.status_code in (500, 502, 503, 504) and attempt < self.max_retries:
+                        retry_after = parse_retry_after(response, default=self.retry_backoff * (2 ** (attempt - 1)))
+                        sleep_time = calculate_backoff(attempt, self.retry_backoff, retry_after=retry_after)
                         logger.warning(
                             "Transient HTTP %d from '%s' (%s). Retrying %d/%d after %.1fs...",
                             response.status_code,
@@ -226,7 +269,7 @@ class RSSFetcher(BaseFetcher):
                         return None, False, None
                 except (requests.exceptions.RequestException, socket.timeout) as exc:
                     if attempt < self.max_retries:
-                        sleep_time = self.retry_backoff * (2 ** (attempt - 1))
+                        sleep_time = calculate_backoff(attempt, self.retry_backoff)
                         logger.warning(
                             "Network error fetching RSS feed '%s' (%s): %s. Retrying %d/%d after %.1fs...",
                             self.source_config.name,
@@ -259,7 +302,7 @@ class RSSFetcher(BaseFetcher):
                     return parsed, False, None
                 except Exception as exc:
                     if attempt < self.max_retries:
-                        sleep_time = self.retry_backoff * (2 ** (attempt - 1))
+                        sleep_time = calculate_backoff(attempt, self.retry_backoff)
                         time.sleep(sleep_time)
                     else:
                         logger.warning(
