@@ -288,3 +288,58 @@ sources:
     url: "https://www.timesofisrael.com/feed/"
     enabled: true
     max_items: 15
+
+  # High-Alpha Anticipatory Catalysts & Institutional Wires
+  - name: "MarketWatch Real-Time Headlines"
+    type: "rss"
+    url: "https://feeds.content.dowjones.io/public/rss/mw_realtimeheadlines"
+    enabled: true
+    max_items: 15
+
+  - name: "CNBC Market Insider"
+    type: "rss"
+    url: "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=20409666"
+    enabled: true
+    max_items: 15
+
+  - name: "CNBC Finance Wire"
+    type: "rss"
+    url: "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664"
+    enabled: true
+    max_items: 15
+
+  - name: "Investing.com Commodities & Energy"
+    type: "rss"
+    url: "https://www.investing.com/rss/news_11.rss"
+    enabled: true
+    max_items: 15
+
+  - name: "Globes Capital Markets Hebrew"
+    type: "rss"
+    url: "https://www.globes.co.il/webservice/rss/rssfeeder.asmx/FeederNode?iID=585"
+    enabled: true
+    max_items: 15
+
+  - name: "Sponser Economy & Equities"
+    type: "rss"
+    url: "http://www.sponser.co.il/Content_rss_articles.aspx?CatId=4"
+    enabled: true
+    max_items: 15
+
+  - name: "Tariffs, Sanctions & Antitrust Catalysts"
+    type: "rss"
+    url: "https://news.google.com/rss/search?q=tariffs+OR+sanctions+OR+%22SEC%22+OR+antitrust&hl=en-US&gl=US&ceid=US:en"
+    enabled: true
+    max_items: 15
+
+  - name: "Middle East Defense, Oil & Airspace"
+    type: "rss"
+    url: "https://news.google.com/rss/search?q=(Israel+OR+%22Middle+East%22)+AND+(sanctions+OR+oil+OR+%22defense+spending%22+OR+geopolitics)&hl=en-US&gl=US&ceid=US:en"
+    enabled: true
+    max_items: 15
+
+  - name: "Shekel, Dollar & BoI Interest Rates"
+    type: "rss"
+    url: "https://news.google.com/rss/search?q=%D7%91%D7%95%D7%A8%D7%A1%D7%94+%D7%90%D7%95+%D7%A9%D7%A2%D7%A8+%D7%94%D7%93%D7%95%D7%9C%D7%A8+%D7%90%D7%95+%D7%A8%D7%99%D7%91%D7%99%D7%AA+%D7%91%D7%A0%D7%A7+%D7%99%D7%A9%D7%A8%D7%90%D7%9C&hl=iw&gl=IL&ceid=IL:iw"
+    enabled: true
+    max_items: 15
