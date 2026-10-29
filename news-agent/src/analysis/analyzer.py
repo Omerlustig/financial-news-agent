@@ -119,9 +119,9 @@ class MarketImpactAnalyzer:
 
         self.fallback_on_error = fallback_on_error
         self.timeout = (
-            getattr(self.llm_settings, "timeout", 15.0)
+            getattr(self.llm_settings, "timeout", 30.0)
             if self.llm_settings is not None
-            else 15.0
+            else 30.0
         )
         self.max_content_length = (
             getattr(self.llm_settings, "max_content_length", 3500)

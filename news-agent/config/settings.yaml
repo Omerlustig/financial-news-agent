@@ -26,7 +26,7 @@ llm:
     - "gemini/gemini-3.1-flash-lite"
     - "gemini/gemini-3.7-flash"
     - "gpt-4o-mini"
-  timeout: 15.0 # Per-request timeout in seconds (prevents hanging on overloaded models)
+  timeout: 30.0 # Per-request timeout in seconds (prevents premature timeouts on complex institutional analysis)
   enable_cache: true # Enable LiteLLM response caching
   max_content_length: 3500 # Max characters of article body passed to LLM (prevents prompt token bloat)
   monthly_budget_usd: 10.0 # Monthly LLM spending cap in USD

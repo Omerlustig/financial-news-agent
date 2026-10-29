@@ -180,7 +180,7 @@ sources:
   - name: "TheMarker All Articles"
     type: "rss"
     url: "https://www.themarker.com/srv/tm-all-articles"
-    enabled: true
+    enabled: false
 
   - name: "TheMarker"
     type: "rss"
@@ -235,7 +235,7 @@ sources:
   - name: "Sponser Capital Markets"
     type: "rss"
     url: "https://news.google.com/rss/search?q=site:sponser.co.il+when:7d&hl=he&gl=IL&ceid=IL:he"
-    enabled: true
+    enabled: false
 
   - name: "Jerusalem Post Business"
     type: "rss"
@@ -248,8 +248,8 @@ sources:
     enabled: false
   - name: "Benzinga Latest"
     type: "rss"
-    url: "https://www.benzinga.com/latest?page=1&feed=rss"
-    fallback_url: "https://www.benzinga.com/feed"
+    url: "https://www.benzinga.com/feed"
+    fallback_url: "https://news.google.com/rss/search?q=site:benzinga.com+when:1d&hl=en-US&gl=US&ceid=US:en"
     enabled: true
 
   # Breaking News & Geopolitical Catalysts (Airspace, Aviation, Defense, Sanctions)

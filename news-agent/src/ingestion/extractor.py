@@ -17,6 +17,10 @@ import requests
 
 try:
     import trafilatura  # type: ignore[import-untyped]
+    # Silence third-party trafilatura logger to prevent routine 403s on external sites
+    # from logging as unhandled ERRORs in application logs
+    logging.getLogger("trafilatura").setLevel(logging.CRITICAL)
+    logging.getLogger("trafilatura.downloads").setLevel(logging.CRITICAL)
 except ImportError:
     trafilatura = None
 
@@ -32,6 +36,18 @@ DEFAULT_MAX_LENGTH: int = 15000
 DEFAULT_USER_AGENT: str = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+
+# Domains that strictly enforce Cloudflare/Akamai bot blocking on article HTML.
+# Full text extraction is skipped to avoid 403 errors; RSS title and summary are used instead.
+UNSUPPORTED_FULL_TEXT_DOMAINS: tuple[str, ...] = (
+    "investing.com",
+    "www.investing.com",
+    "il.investing.com",
+    "bloomberg.com",
+    "www.bloomberg.com",
+    "reuters.com",
+    "www.reuters.com",
 )
 
 NON_HTML_EXTENSIONS: tuple[str, ...] = (
@@ -115,6 +131,15 @@ class ArticleBodyExtractor:
         if self._is_non_html_url(url):
             logger.debug("Skipping full-text extraction for non-HTML URL: %s", url)
             return None
+
+        # Guardrail: Check domains that strictly block full-text scraping with bot-walls
+        try:
+            host = urllib.parse.urlsplit(url).netloc.lower()
+            if host in UNSUPPORTED_FULL_TEXT_DOMAINS:
+                logger.debug("Skipping full-text extraction for %s: known bot-protected domain", host)
+                return None
+        except Exception:
+            pass
 
         # Guardrail: Check domain rate-limit cooldown
         from src.ingestion.base import DomainCooldownTracker
