@@ -214,8 +214,8 @@ sources:
 
   - name: "Walla Finance"
     type: "rss"
-    url: "https://rss.walla.co.il/feed/557"
-    enabled: false
+    url: "https://rss.walla.co.il/feed/2?type=main"
+    enabled: true
 
   - name: "Calcalist CTech English"
     type: "rss"
@@ -286,6 +286,18 @@ sources:
   - name: "Times of Israel News"
     type: "rss"
     url: "https://www.timesofisrael.com/feed/"
+    enabled: true
+    max_items: 15
+
+  - name: "Rotter News Scoops"
+    type: "rss"
+    url: "https://rotter.net/rss/rotternews.xml"
+    enabled: true
+    max_items: 20
+
+  - name: "Ynet Main News"
+    type: "rss"
+    url: "https://www.ynet.co.il/Integration/StoryRss2.xml"
     enabled: true
     max_items: 15
 

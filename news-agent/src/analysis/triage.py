@@ -15,12 +15,13 @@ FINANCIAL_SOURCE_KEYWORDS: Set[str] = {
     "marketwatch", "calcalist", "themarker", "bizportal", "sponser",
     "globes", "sec edgar", "maya", "tase", "federal reserve",
     "financial times", "ft.com", "finurls", "yahoo finance", "benzinga", "eia",
+    "walla finance",
 }
 
 # General breaking news and political feeds that require economic relevance pre-filtering
 BREAKING_OR_GENERAL_FEED_KEYWORDS: Set[str] = {
     "breaking", "world", "politics", "general", "ynet breaking",
-    "ynet news english", "times of israel", "מבזק", "חדשות",
+    "ynet news english", "times of israel", "rotter", "ynet main", "מבזק", "חדשות",
 }
 
 # Multilingual keywords signaling potential macroeconomic, sector, or single-stock transmission
