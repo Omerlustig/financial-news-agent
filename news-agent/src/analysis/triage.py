@@ -9,12 +9,18 @@ import re
 from typing import Set
 from src.models import RawArticle
 
-# Known financial feeds that never need filtering (always pass triage)
+# Known dedicated financial feeds that never need filtering (always pass triage)
 FINANCIAL_SOURCE_KEYWORDS: Set[str] = {
     "reuters", "bloomberg", "cnbc", "investing", "seeking alpha",
     "marketwatch", "calcalist", "themarker", "bizportal", "sponser",
     "globes", "sec edgar", "maya", "tase", "federal reserve",
     "financial times", "ft.com", "finurls", "yahoo finance", "benzinga", "eia",
+}
+
+# General breaking news and political feeds that require economic relevance pre-filtering
+BREAKING_OR_GENERAL_FEED_KEYWORDS: Set[str] = {
+    "breaking", "world", "politics", "general", "ynet breaking",
+    "ynet news english", "times of israel", "מבזק", "חדשות",
 }
 
 # Multilingual keywords signaling potential macroeconomic, sector, or single-stock transmission
@@ -34,6 +40,12 @@ ECONOMIC_TRANSMISSION_KEYWORDS = [
     r"\boil\b", r"\bgas\b", r"\bcrude\b", r"\bopec\b", r"\bpetroleum\b",
     r"\brefiner(y|ies)\b", r"\bpipelines?\b", r"\benergy\b",
     r"נפט", r"גז", r"חבית", r"זיקוק", r"צינור", r"אופ\"?ק",
+
+    # Technology, Semiconductors & AI Infrastructure
+    r"\bchips?\b", r"\bsemiconductors?\b", r"\bsuperchips?\b", r"\bcloud\b",
+    r"\bhardware\b", r"\bsoftware\b", r"\bdata\s+centers?\b", r"\bcompute\b",
+    r"\bserver\b", r"\bfoundr(y|ies)\b", r"\bfab\b", r"\blithograph(y)?\b",
+    r"שבב(ים)?", r"מוליכים\s+למחצה", r"ענן", r"חוות\s+שרתים", r"בינה\s+מלאכותית",
 
     # Trade, Tariffs, Sanctions & Sovereign Policy
     r"\btariffs?\b", r"\bsanctions?\b", r"\bembargo\b", r"\bexport\s+bans?\b",
@@ -58,15 +70,24 @@ RE_ECONOMIC_PATTERN = re.compile("|".join(ECONOMIC_TRANSMISSION_KEYWORDS), re.IG
 def is_economically_relevant(article: RawArticle) -> bool:
     """Evaluate whether an article possesses tradeable economic or sector transmission potential.
     
-    Dedicated financial sources always pass triage. General breaking news, politics,
-    or world news feeds are checked against the multilingual economic transmission pattern.
+    Dedicated financial sources and standard corporate feeds always pass triage.
+    General breaking news, politics, and world news feeds are screened against the
+    multilingual economic transmission pattern.
     """
     source_lower = (article.source_name or "").lower()
+
+    # 1. Fast-path: dedicated financial sources always pass triage
     for fin_src in FINANCIAL_SOURCE_KEYWORDS:
         if fin_src in source_lower:
             return True
 
-    # Combine title, summary, and content snippet for heuristic matching
+    # 2. Check if source is a general breaking or political feed
+    is_general_feed = any(kw in source_lower for kw in BREAKING_OR_GENERAL_FEED_KEYWORDS)
+    if not is_general_feed:
+        # Standard niche / tech / business / corporate feeds pass through
+        return True
+
+    # 3. Breaking / political feed: screen content against economic transmission keywords
     content = f"{article.title or ''} {article.summary or ''} {article.content or ''}"
     if not content.strip():
         return False

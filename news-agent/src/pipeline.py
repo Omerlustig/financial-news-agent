@@ -33,6 +33,7 @@ from src.analysis.technical import TradingViewEngine
 from src.analysis.verification import FactVerificationEngine
 from src.analysis.novelty import NoveltyEngine
 from src.analysis.decision_gate import TwoLayerGateEngine
+from src.analysis.triage import is_economically_relevant
 from src.notification.base import BaseNotifier
 from src.notification.telegram import TelegramNotifier
 from src.notification.console import ConsoleNotifier
@@ -757,6 +758,15 @@ class Pipeline:
             )
             if not self.enable_fact_verification:
                 is_verified = True
+
+            # Stage 1 Economic Relevance Pre-filter (drop non-economic breaking noise early)
+            if not is_economically_relevant(canonical):
+                logger.info(
+                    "Skipping non-economic general article '%s' from source '%s' (0 LLM tokens burned)",
+                    canonical.title,
+                    canonical.source_name,
+                )
+                continue
 
             # Deep Comprehension: Enrich canonical article with full text if missing or brief snippet
             if getattr(self, "extract_full_body", True) and canonical.url:

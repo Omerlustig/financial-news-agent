@@ -251,3 +251,40 @@ sources:
     url: "https://www.benzinga.com/latest?page=1&feed=rss"
     fallback_url: "https://www.benzinga.com/feed"
     enabled: true
+
+  # Breaking News & Geopolitical Catalysts (Airspace, Aviation, Defense, Sanctions)
+  - name: "Reuters World Wire"
+    type: "rss"
+    url: "https://news.google.com/rss/search?q=site:reuters.com/world+when:1d&hl=en-US&gl=US&ceid=US:en"
+    enabled: true
+    max_items: 15
+
+  - name: "Google News World"
+    type: "rss"
+    url: "https://news.google.com/rss/headlines/section/topic/WORLD?hl=en-US&gl=US&ceid=US:en"
+    enabled: true
+    max_items: 15
+
+  - name: "Google News Politics"
+    type: "rss"
+    url: "https://news.google.com/rss/headlines/section/topic/POLITICS?hl=en-US&gl=US&ceid=US:en"
+    enabled: true
+    max_items: 15
+
+  - name: "Ynet Breaking News"
+    type: "rss"
+    url: "https://www.ynet.co.il/Integration/StoryRss1854.xml"
+    enabled: true
+    max_items: 20
+
+  - name: "Ynet News English Breaking"
+    type: "rss"
+    url: "https://www.ynetnews.com/Integration/StoryRss3082.xml"
+    enabled: true
+    max_items: 15
+
+  - name: "Times of Israel News"
+    type: "rss"
+    url: "https://www.timesofisrael.com/feed/"
+    enabled: true
+    max_items: 15

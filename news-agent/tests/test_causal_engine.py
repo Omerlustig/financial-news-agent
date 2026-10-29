@@ -193,3 +193,18 @@ def test_decision_gate_boosts_anticipatory_catalyst():
     boosted_score = engine.evaluate_opportunity_score(pred_analysis)
     assert boosted_score == min(10.0, round(base_score + 1.5, 2))
 
+
+def test_pipeline_triage_drops_non_economic_article():
+    from src.analysis.triage import is_economically_relevant
+
+    article = RawArticle(
+        title="Pop singer releases new music video in Tel Aviv",
+        summary="Entertainment news and video release party.",
+        url="https://ynetnews.com/entertainment/1",
+        published_at=datetime.now(timezone.utc),
+        source_name="Ynet Breaking News",
+    )
+    # Pipeline triage should drop this article before LLM analyzer is invoked
+    assert is_economically_relevant(article) is False
+
+
