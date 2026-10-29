@@ -74,6 +74,8 @@ class TimeHorizon(str, Enum):
     SHORT_TERM = "SHORT_TERM"      # 1-7 days
     MEDIUM_TERM = "MEDIUM_TERM"    # 2-8 weeks
     LONG_TERM = "LONG_TERM"        # months+
+    TACTICAL_1_3_DAYS = "TACTICAL_1_3_DAYS"  # Fast reaction (chokepoints, airspace/flight shocks, defense flares)
+    SWING_2_4_WEEKS   = "SWING_2_4_WEEKS"    # Fundamental repricing (policy/tariffs, capex cycles, earnings guidance)
 
     def __str__(self) -> str:
         return self.value
@@ -82,6 +84,10 @@ class TimeHorizon(str, Enum):
     def _missing_(cls, value: object) -> Any:
         if isinstance(value, str):
             normalized = value.strip().upper().replace(" ", "_").replace("-", "_")
+            if "TACTICAL" in normalized or "1_3_DAY" in normalized:
+                return cls.TACTICAL_1_3_DAYS
+            if "SWING" in normalized or "2_4_WEEK" in normalized:
+                return cls.SWING_2_4_WEEKS
             if "SHORT" in normalized or "1_7_DAY" in normalized:
                 return cls.SHORT_TERM
             if "MEDIUM" in normalized or "2_8_WEEK" in normalized:
@@ -721,24 +727,6 @@ class CatalystStage(str, Enum):
     PREDICTIVE_ANTICIPATORY = "PREDICTIVE_ANTICIPATORY"  # Fresh real-world event; stock unpriced (Maximum Alpha)
     SECOND_ORDER_UNPRICED   = "SECOND_ORDER_UNPRICED"    # Stock A rallied, but supplier/rival Stock B is unpriced
     POST_FACTO_RECAP        = "POST_FACTO_RECAP"         # Stock already surged 10%+; move already priced in
-
-    def __str__(self) -> str:
-        return self.value
-
-    @classmethod
-    def _missing_(cls, value: object) -> Any:
-        if isinstance(value, str):
-            normalized = value.strip().upper().replace(" ", "_").replace("-", "_")
-            for member in cls:
-                if member.value == normalized:
-                    return member
-        return super()._missing_(value)
-
-
-class TimeHorizon(str, Enum):
-    """Expected transmission horizon for catalyst price discovery."""
-    TACTICAL_1_3_DAYS = "TACTICAL_1_3_DAYS"  # Fast reaction (chokepoints, airspace/flight shocks, defense flares)
-    SWING_2_4_WEEKS   = "SWING_2_4_WEEKS"    # Fundamental repricing (policy/tariffs, capex cycles, earnings guidance)
 
     def __str__(self) -> str:
         return self.value

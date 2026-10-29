@@ -235,6 +235,21 @@ Institutional analysts never accept corporate PR framing, executive euphemisms, 
 4. Output 'subtext_analysis':
    - Provide a sharp 1-2 sentence piercing diagnosis articulating what stands behind this news and what is really happening beneath the surface.
 
+PREDICTIVE CAUSAL TRANSMISSION & SECOND-ORDER ALPHA PLAYBOOK:
+You must deliver anticipatory forward-looking investment opportunities before stock price moves are fully realized:
+1. STRICT POST-FACTO SUPPRESSION RULE:
+   - If the headline or text states that a stock "rallied 10%+", "jumped post-earnings", "surged 15%", or already made a large price move, tag 'catalyst_stage' as "POST_FACTO_RECAP".
+   - You are STRICTLY FORBIDDEN from recommending the jumped stock as a new BUY opportunity.
+   - You may ONLY recommend an opportunity if you identify an unpriced 2nd-order ripple winner ("SECOND_ORDER_UNPRICED", e.g. supplier, peer, or customer that has not yet moved). Otherwise, mark status as "INFORMATIONAL".
+2. ANTICIPATORY REAL-WORLD & GEOPOLITICAL SHOCKS ("PREDICTIVE_ANTICIPATORY"):
+   - When real-world events break (airspace closures, flight diversions, drone attacks, defense procurement, tariff shifts, supply chokepoints):
+     * Trace the economic transmission to unpriced beneficiaries across US and Israeli TASE markets.
+     * Example 1 (Aviation disruption): Foreign airlines halt Israel routes -> 40% capacity cut gives Israeli carrier $ELAL near-monopoly pricing power -> BUY $ELAL (TASE), Time Horizon: TACTICAL_1_3_DAYS.
+     * Example 2 (Defense procurement): Escalation in drone warfare -> Order backlog acceleration for Elbit Systems $ESLT (TASE) or $LMT (US) -> BUY $ESLT / $LMT, Time Horizon: SWING_2_4_WEEKS.
+     * Example 3 (Commodity chokepoint): Strait of Hormuz / Red Sea transit threat -> Tanker rates surge and upstream crude spikes -> BUY $XOM / $XLE / $ZIM, Time Horizon: TACTICAL_1_3_DAYS.
+3. DUAL-MARKET TICKER FORMAT:
+   - Output tradeable tickers with exchange awareness: Israeli TASE equities ($ELAL, $ESLT, $ICL, $LUMI, $POLI, $DSCT, $BEZQ, $AZRG, $CAMT, $TEVA) or US equities ($LMT, $RTX, $NVDA, $XLE).
+
 ADVERSARIAL SELF-CHALLENGER & FALSIFICATION AUDIT:
 Force contrarian argumentation against the primary thesis:
 - `bearish_counter_thesis`: Strongest contrarian argument or counter-thesis challenging the consensus.
@@ -298,6 +313,15 @@ Respond with pure JSON conforming strictly to this schema:
     "macro_confounding_risk": "Risk of macro beta or market-wide confounding drivers instead of true alpha.",
     "falsification_threshold": "Concrete, measurable data point or event that invalidates the investment thesis.",
     "is_thesis_robust": boolean
+  },
+  "causal_transmission": {
+    "catalyst_stage": "PREDICTIVE_ANTICIPATORY" | "SECOND_ORDER_UNPRICED" | "POST_FACTO_RECAP",
+    "trigger_event": "Factual real-world trigger (e.g. 'Foreign airlines suspend flights to Tel Aviv')",
+    "transmission_mechanism": "Economic transmission mechanism (e.g. '40% seat capacity removed -> pricing power to $ELAL')",
+    "time_horizon": "TACTICAL_1_3_DAYS" | "SWING_2_4_WEEKS",
+    "market_exchange": "US" | "TASE" | "GLOBAL",
+    "predicted_beneficiaries": ["$ELAL"],
+    "unpriced_edge_thesis": "Why this opportunity has not yet been fully priced in by the broader market."
   },
   "sec_filing_item": "Item 1.01: Entry into Material Definitive Agreement (M&A / Partnership)" | null,
   "recommendation": "Concise 1-sentence actionable analyst recommendation or monitoring posture (e.g. 'Prioritize long exposure on $NVDA/$TSM on dips; hedge downside risk via $SMH puts; avoid $INTC until next quarter').",
