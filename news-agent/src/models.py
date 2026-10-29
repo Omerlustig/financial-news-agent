@@ -716,6 +716,94 @@ class EventLineageRecord(BaseModel):
         return [str(v).strip()]
 
 
+class CatalystStage(str, Enum):
+    """Lifecycle stage of a market catalyst for timing and alpha capture."""
+    PREDICTIVE_ANTICIPATORY = "PREDICTIVE_ANTICIPATORY"  # Fresh real-world event; stock unpriced (Maximum Alpha)
+    SECOND_ORDER_UNPRICED   = "SECOND_ORDER_UNPRICED"    # Stock A rallied, but supplier/rival Stock B is unpriced
+    POST_FACTO_RECAP        = "POST_FACTO_RECAP"         # Stock already surged 10%+; move already priced in
+
+    def __str__(self) -> str:
+        return self.value
+
+    @classmethod
+    def _missing_(cls, value: object) -> Any:
+        if isinstance(value, str):
+            normalized = value.strip().upper().replace(" ", "_").replace("-", "_")
+            for member in cls:
+                if member.value == normalized:
+                    return member
+        return super()._missing_(value)
+
+
+class TimeHorizon(str, Enum):
+    """Expected transmission horizon for catalyst price discovery."""
+    TACTICAL_1_3_DAYS = "TACTICAL_1_3_DAYS"  # Fast reaction (chokepoints, airspace/flight shocks, defense flares)
+    SWING_2_4_WEEKS   = "SWING_2_4_WEEKS"    # Fundamental repricing (policy/tariffs, capex cycles, earnings guidance)
+
+    def __str__(self) -> str:
+        return self.value
+
+    @classmethod
+    def _missing_(cls, value: object) -> Any:
+        if isinstance(value, str):
+            normalized = value.strip().upper().replace(" ", "_").replace("-", "_")
+            for member in cls:
+                if member.value == normalized:
+                    return member
+        return super()._missing_(value)
+
+
+class MarketExchange(str, Enum):
+    """Primary trading venue / exchange for recommended tradeable assets."""
+    US     = "US"      # NYSE / NASDAQ
+    TASE   = "TASE"    # Tel Aviv Stock Exchange (Israel)
+    GLOBAL = "GLOBAL"  # Cross-market / Multi-exchange ETFs
+
+    def __str__(self) -> str:
+        return self.value
+
+    @classmethod
+    def _missing_(cls, value: object) -> Any:
+        if isinstance(value, str):
+            normalized = value.strip().upper().replace(" ", "_")
+            for member in cls:
+                if member.value == normalized:
+                    return member
+        return super()._missing_(value)
+
+
+class CausalTransmissionAnalysis(BaseModel):
+    """End-to-end causal transmission chain predicting unpriced market beneficiaries."""
+    catalyst_stage: CatalystStage = Field(
+        default=CatalystStage.PREDICTIVE_ANTICIPATORY,
+        description="Stage of catalyst: PREDICTIVE_ANTICIPATORY, SECOND_ORDER_UNPRICED, or POST_FACTO_RECAP."
+    )
+    trigger_event: str = Field(
+        ...,
+        description="Factual real-world trigger (e.g. 'Foreign airlines suspend flights to Tel Aviv')."
+    )
+    transmission_mechanism: str = Field(
+        ...,
+        description="Economic transmission mechanism (e.g. '40% seat capacity removed -> pricing power to $ELAL')."
+    )
+    time_horizon: TimeHorizon = Field(
+        default=TimeHorizon.TACTICAL_1_3_DAYS,
+        description="Expected transmission horizon: TACTICAL_1_3_DAYS or SWING_2_4_WEEKS."
+    )
+    market_exchange: MarketExchange = Field(
+        default=MarketExchange.US,
+        description="Primary exchange of the tradeable opportunity: US or TASE."
+    )
+    predicted_beneficiaries: List[str] = Field(
+        default_factory=list,
+        description="Tradeable tickers positioned to rise (e.g. ['$ELAL', '$ESLT'])."
+    )
+    unpriced_edge_thesis: str = Field(
+        default="",
+        description="Why this opportunity has not yet been fully priced in by the broader market."
+    )
+
+
 class MarketImpactAnalysis(BaseModel):
     """Institutional financial analyst reasoning and scoring output."""
     is_market_moving: bool = Field(
@@ -856,6 +944,19 @@ class MarketImpactAnalysis(BaseModel):
         default=None,
         description="Linked persistent event lineage identifier."
     )
+    causal_transmission: Optional[CausalTransmissionAnalysis] = Field(
+        default=None,
+        description="End-to-end causal transmission chain predicting unpriced market beneficiaries."
+    )
+
+    @field_validator("causal_transmission", mode="before")
+    @classmethod
+    def normalize_causal_transmission(cls, v: Any) -> Optional[CausalTransmissionAnalysis]:
+        if v is None:
+            return None
+        if isinstance(v, dict):
+            return CausalTransmissionAnalysis(**v)
+        return v
 
     @field_validator("four_d_sentiment", mode="before")
     @classmethod
