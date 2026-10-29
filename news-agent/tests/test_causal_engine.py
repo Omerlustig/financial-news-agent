@@ -32,3 +32,64 @@ def test_tase_ticker_filtering_support():
     assert "$ICL" in valid
     assert "$NVDA" in valid
     assert "$USA" not in valid  # Sovereign entity dropped
+
+
+def test_triage_filter_allows_aviation_and_defense_shocks():
+    from datetime import datetime, timezone
+    from src.models import RawArticle
+    from src.analysis.triage import is_economically_relevant
+
+    article = RawArticle(
+        title="Flight diverted after security alert over airspace",
+        summary="Foreign carriers are suspending flights to Tel Aviv amid regional tensions.",
+        url="https://ynetnews.com/article/1",
+        published_at=datetime.now(timezone.utc),
+        source_name="Ynet Breaking News",
+    )
+    assert is_economically_relevant(article) is True
+
+
+def test_triage_filter_allows_hebrew_aviation_disruption():
+    from datetime import datetime, timezone
+    from src.models import RawArticle
+    from src.analysis.triage import is_economically_relevant
+
+    article = RawArticle(
+        title="חברות תעופה זרות מבטלות טיסות לנתבג בעקבות המצב הביטחוני",
+        summary="אל על נערכת לתגבר טיסות לנוסעים שנתקעו באירופה.",
+        url="https://ynet.co.il/article/2",
+        published_at=datetime.now(timezone.utc),
+        source_name="Ynet Breaking News",
+    )
+    assert is_economically_relevant(article) is True
+
+
+def test_triage_filter_drops_celebrity_and_sports_noise():
+    from datetime import datetime, timezone
+    from src.models import RawArticle
+    from src.analysis.triage import is_economically_relevant
+
+    article = RawArticle(
+        title="Celebrity wedding draws thousands of fans in Tel Aviv",
+        summary="Actor married singer in private ceremony with star guests.",
+        url="https://ynetnews.com/article/3",
+        published_at=datetime.now(timezone.utc),
+        source_name="Ynet Breaking News",
+    )
+    assert is_economically_relevant(article) is False
+
+
+def test_triage_always_allows_financial_sources():
+    from datetime import datetime, timezone
+    from src.models import RawArticle
+    from src.analysis.triage import is_economically_relevant
+
+    article = RawArticle(
+        title="General market summary",
+        summary="Market wrap for the day.",
+        url="https://reuters.com/business/1",
+        published_at=datetime.now(timezone.utc),
+        source_name="Reuters Live Wire",
+    )
+    assert is_economically_relevant(article) is True
+
