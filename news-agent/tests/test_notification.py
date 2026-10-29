@@ -1224,6 +1224,51 @@ def test_format_batch_telegram_message_unites_same_stock_across_sources():
     assert "CNBC Top News" in msg
 
 
+def test_format_predictive_opportunity_item():
+    from src.models import (
+        CatalystStage,
+        TimeHorizon,
+        MarketExchange,
+        CausalTransmissionAnalysis,
+    )
+    from src.notification.telegram import format_clean_opportunity_item
+
+    article = RawArticle(
+        title="Airlines halt Tel Aviv routes amid security alerts",
+        url="https://ynetnews.com/article/elal",
+        source_name="Ynet Breaking News",
+    )
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=9,
+        impact_grade=ImpactGrade.CRITICAL,
+        affected_tickers=["$ELAL"],
+        beneficiaries=["$ELAL"],
+        affected_sectors=["Commercial Aviation"],
+        summary="Foreign carriers suspend flights following regional security alert.",
+        catalyst_thesis="Domestic carrier captures near-monopoly pricing power.",
+        causal_transmission=CausalTransmissionAnalysis(
+            catalyst_stage=CatalystStage.PREDICTIVE_ANTICIPATORY,
+            trigger_event="Foreign airlines cancel Israel flights following security alert",
+            transmission_mechanism="Seat capacity falls 40%; domestic carrier captures near-monopoly pricing power",
+            time_horizon=TimeHorizon.TACTICAL_1_3_DAYS,
+            market_exchange=MarketExchange.TASE,
+            predicted_beneficiaries=["$ELAL"],
+            unpriced_edge_thesis="Unpriced load factor surge before quarterly traffic filings",
+        ),
+    )
+
+    card = format_clean_opportunity_item(article, analysis, index=1)
+    assert "TASE" in card
+    assert "Tactical (1-3 Days)" in card
+    assert "$ELAL" in card
+    assert "Trigger:" in card
+    assert "Transmission:" in card
+    assert "Unpriced Edge:" in card
+    assert "Ynet Breaking News" in card
+
+
+
 
 
 

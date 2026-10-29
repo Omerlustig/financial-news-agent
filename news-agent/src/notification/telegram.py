@@ -7,13 +7,16 @@ from typing import Any, Dict, List, Optional, Tuple
 import requests
 
 from src.models import (
+    CatalystStage,
     ImpactGrade,
+    MarketExchange,
     MarketImpactAnalysis,
     RawArticle,
     SentimentLabel,
     SentimentScore,
     SurgeLevel,
     TelegramButton,
+    TimeHorizon,
     TrendMetrics,
     TrendVerdict,
 )
@@ -643,6 +646,11 @@ def format_clean_opportunity_item(
         else:
             beneficiaries = analysis.affected_tickers or []
 
+    # Check for predictive causal transmission
+    causal = getattr(analysis, "causal_transmission", None)
+    if causal and causal.predicted_beneficiaries:
+        beneficiaries = [b for b in causal.predicted_beneficiaries if b and b != "None"]
+
     # Action header & leading decision
     if include_avoid and negatively_exposed and not beneficiaries:
         action_header = f"🔴 AVOID {', '.join(negatively_exposed)}"
@@ -659,6 +667,25 @@ def format_clean_opportunity_item(
         else:
             action_header = f"🟢 BUY {', '.join(primary_list)}" if primary_list else "🟢 BUY"
 
+    # Badges for exchange and horizon if causal_transmission present
+    extra_badges: List[str] = []
+    if causal:
+        ex = getattr(causal, "market_exchange", None)
+        ex_val = getattr(ex, "value", str(ex)).upper() if ex else "US"
+        if "TASE" in ex_val:
+            extra_badges.append("🇮🇱 TASE")
+        elif "GLOBAL" in ex_val:
+            extra_badges.append("🌐 GLOBAL")
+        else:
+            extra_badges.append("🇺🇸 US")
+
+        hz = getattr(causal, "time_horizon", None)
+        hz_val = getattr(hz, "value", str(hz)).upper() if hz else "TACTICAL"
+        if "TACTICAL" in hz_val or "1_3" in hz_val or "INTRADAY" in hz_val:
+            extra_badges.append("⏱️ Tactical (1-3 Days)")
+        else:
+            extra_badges.append("⏱️ Swing (2-4 Weeks)")
+
     primary_sector = ""
     if sectors_list:
         valid_sectors = [s for s in sectors_list if s and s.strip().lower() != "none"]
@@ -666,35 +693,56 @@ def format_clean_opportunity_item(
             primary_sector = valid_sectors[0].strip()
 
     prefix = f"{index}. " if index is not None else ""
+    header_parts = [f"{prefix}{action_header} (Score: {score}/10)"]
+    if extra_badges:
+        header_parts.extend(extra_badges)
     if primary_sector:
-        header = f"<b>{prefix}{action_header} (Score: {score}/10) | {escape_html(primary_sector)}</b>"
-    else:
-        header = f"<b>{prefix}{action_header} (Score: {score}/10)</b>"
+        header_parts.append(escape_html(primary_sector))
 
+    header = f"<b>{' | '.join(header_parts)}</b>"
     lines = [header]
 
-    # 1. Catalyst (What happened)
-    catalyst_text = analysis.summary
-    if not catalyst_text and analysis.causal_chain and analysis.causal_chain.event_facts:
-        catalyst_text = analysis.causal_chain.event_facts
-    if not catalyst_text:
-        catalyst_text = article.title
-    if catalyst_text:
-        clean_cat = truncate_at_word(catalyst_text, max_length=160)
-        lines.append(f"• <b>Catalyst:</b> {escape_html(clean_cat)}")
+    if causal:
+        # 1. Trigger (What happened)
+        trigger_text = causal.trigger_event or analysis.summary or article.title
+        clean_trig = truncate_at_word(trigger_text, max_length=160)
+        lines.append(f"• <b>Trigger:</b> {escape_html(clean_trig)}")
 
-    # 2. Edge (Why it matters / Economic transmission mechanism)
-    edge_text = None
-    if analysis.causal_chain and analysis.causal_chain.economic_mechanism:
-        edge_text = analysis.causal_chain.economic_mechanism.strip()
-    elif analysis.catalyst_thesis:
-        edge_text = analysis.catalyst_thesis.strip()
-    elif getattr(analysis, "subtext_analysis", None):
-        edge_text = analysis.subtext_analysis.strip()
+        # 2. Transmission (Economic mechanism)
+        trans_text = causal.transmission_mechanism or analysis.catalyst_thesis or ""
+        if trans_text:
+            clean_trans = truncate_at_word(trans_text, max_length=160)
+            lines.append(f"• <b>Transmission:</b> {escape_html(clean_trans)}")
 
-    if edge_text and edge_text.lower() != (catalyst_text or "").lower():
-        clean_edge = truncate_at_word(edge_text, max_length=160)
-        lines.append(f"• <b>Edge:</b> {escape_html(clean_edge)}")
+        # 3. Unpriced Edge (Why not yet priced in)
+        edge_text = causal.unpriced_edge_thesis or getattr(analysis, "subtext_analysis", "") or ""
+        if edge_text:
+            clean_edge = truncate_at_word(edge_text, max_length=160)
+            lines.append(f"• <b>Unpriced Edge:</b> {escape_html(clean_edge)}")
+    else:
+        # Standard legacy format
+        # 1. Catalyst (What happened)
+        catalyst_text = analysis.summary
+        if not catalyst_text and analysis.causal_chain and analysis.causal_chain.event_facts:
+            catalyst_text = analysis.causal_chain.event_facts
+        if not catalyst_text:
+            catalyst_text = article.title
+        if catalyst_text:
+            clean_cat = truncate_at_word(catalyst_text, max_length=160)
+            lines.append(f"• <b>Catalyst:</b> {escape_html(clean_cat)}")
+
+        # 2. Edge (Why it matters / Economic transmission mechanism)
+        edge_text = None
+        if analysis.causal_chain and analysis.causal_chain.economic_mechanism:
+            edge_text = analysis.causal_chain.economic_mechanism.strip()
+        elif analysis.catalyst_thesis:
+            edge_text = analysis.catalyst_thesis.strip()
+        elif getattr(analysis, "subtext_analysis", None):
+            edge_text = analysis.subtext_analysis.strip()
+
+        if edge_text and edge_text.lower() != (catalyst_text or "").lower():
+            clean_edge = truncate_at_word(edge_text, max_length=160)
+            lines.append(f"• <b>Edge:</b> {escape_html(clean_edge)}")
 
     # 3. Bullish Sectors (sentiment score >= 0.55)
     bullish_sectors = get_bullish_sectors(analysis, threshold=0.55)
