@@ -132,3 +132,64 @@ def test_analyzer_parses_causal_transmission():
     assert analysis.causal_transmission.catalyst_stage == CatalystStage.PREDICTIVE_ANTICIPATORY
     assert analysis.causal_transmission.market_exchange == MarketExchange.TASE
     assert "$ELAL" in analysis.causal_transmission.predicted_beneficiaries
+
+
+def test_decision_gate_blocks_post_facto_recap():
+    from src.analysis.decision_gate import TwoLayerGateEngine
+
+    engine = TwoLayerGateEngine()
+    analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=9,
+        impact_grade="HIGH",
+        status="OPPORTUNITY_CANDIDATE",
+        summary="Oracle shares rallied 11% on revenue forecast.",
+        catalyst_thesis="Capex concerns ease.",
+        affected_tickers=["$ORCL"],
+        beneficiaries=["$ORCL"],
+        causal_transmission=CausalTransmissionAnalysis(
+            catalyst_stage=CatalystStage.POST_FACTO_RECAP,
+            trigger_event="Oracle shares rallied 11% after revenue projection",
+            transmission_mechanism="Capex capped",
+            time_horizon=TimeHorizon.SWING_2_4_WEEKS,
+            market_exchange=MarketExchange.US,
+            predicted_beneficiaries=["$ORCL"],
+            unpriced_edge_thesis="Move already completed",
+        ),
+    )
+    decision = engine.evaluate_gates(analysis)
+    assert decision.passes_opportunity_gate is False
+    assert "POST_FACTO" in decision.gate_verdict
+
+
+def test_decision_gate_boosts_anticipatory_catalyst():
+    from src.analysis.decision_gate import TwoLayerGateEngine
+
+    engine = TwoLayerGateEngine()
+    # Baseline analysis without causal transmission
+    base_analysis = MarketImpactAnalysis(
+        is_market_moving=True,
+        confidence_score=7,
+        impact_grade="HIGH",
+        status="OPPORTUNITY_CANDIDATE",
+        summary="Foreign airlines cancel Israel flights.",
+        catalyst_thesis="Domestic capacity shortage.",
+        affected_tickers=["$ELAL"],
+        beneficiaries=["$ELAL"],
+    )
+    base_score = engine.evaluate_opportunity_score(base_analysis)
+
+    # Analysis with predictive anticipatory catalyst
+    pred_analysis = base_analysis.model_copy()
+    pred_analysis.causal_transmission = CausalTransmissionAnalysis(
+        catalyst_stage=CatalystStage.PREDICTIVE_ANTICIPATORY,
+        trigger_event="Airlines cancel flights",
+        transmission_mechanism="Domestic monopoly",
+        time_horizon=TimeHorizon.TACTICAL_1_3_DAYS,
+        market_exchange=MarketExchange.TASE,
+        predicted_beneficiaries=["$ELAL"],
+        unpriced_edge_thesis="Unpriced traffic surge",
+    )
+    boosted_score = engine.evaluate_opportunity_score(pred_analysis)
+    assert boosted_score == min(10.0, round(base_score + 1.5, 2))
+

@@ -10,6 +10,7 @@ import logging
 from typing import Optional, Union
 
 from src.models import (
+    CatalystStage,
     EventStatus,
     HardGates,
     MarketImpactAnalysis,
@@ -159,7 +160,18 @@ class TwoLayerGateEngine:
         # 5. Watchlist match boost (+1.0)
         watchlist_boost = 1.0 if getattr(analysis, "is_watchlist_match", False) else 0.0
 
-        raw_opportunity = cash_flow_score + surprise_score + robustness_mod + tech_boost + watchlist_boost
+        # 6. Predictive causal transmission boost / penalty
+        causal_boost = 0.0
+        if getattr(analysis, "causal_transmission", None) is not None:
+            stage = getattr(analysis.causal_transmission, "catalyst_stage", None)
+            if stage == CatalystStage.PREDICTIVE_ANTICIPATORY:
+                causal_boost = 1.5
+            elif stage == CatalystStage.SECOND_ORDER_UNPRICED:
+                causal_boost = 1.0
+            elif stage == CatalystStage.POST_FACTO_RECAP:
+                causal_boost = -3.0
+
+        raw_opportunity = cash_flow_score + surprise_score + robustness_mod + tech_boost + watchlist_boost + causal_boost
         opportunity_score = max(0.0, min(10.0, raw_opportunity))
         return round(opportunity_score, 2)
 
@@ -209,8 +221,21 @@ class TwoLayerGateEngine:
             passes_event_quality_gate = False
             passes_opportunity_gate = False
 
+        # Post-facto price recap check: suppress opportunities where move has already occurred
+        is_post_facto_recap = False
+        if getattr(analysis, "causal_transmission", None) is not None:
+            if getattr(analysis.causal_transmission, "catalyst_stage", None) == CatalystStage.POST_FACTO_RECAP:
+                is_post_facto_recap = True
+                passes_opportunity_gate = False
+
         # Gate verdict determination
-        if passes_event_quality_gate and passes_opportunity_gate:
+        if is_post_facto_recap:
+            gate_verdict = "REJECT_POST_FACTO"
+            rejection_reason = (
+                "Rejected: Catalyst represents a post-facto price recap (stock already surged on news). "
+                "Zero anticipatory alpha remaining."
+            )
+        elif passes_event_quality_gate and passes_opportunity_gate:
             gate_verdict = "ALERT"
             rejection_reason = None
         elif event_quality_score >= 6.0 or opportunity_score >= 6.0:
