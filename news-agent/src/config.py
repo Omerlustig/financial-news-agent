@@ -153,7 +153,32 @@ class TelegramSettings(BaseModel):
         return bool(self.bot_token and self.chat_id)
 
 
+class PreFilterSettings(BaseModel):
+    enabled: bool = True
+    drop_sponsored: bool = True
+    min_title_length: int = 15
 
+
+class MarketDataSettings(BaseModel):
+    enabled: bool = True
+    provider: str = "tradingview"
+    fetch_timeout_sec: float = 3.0
+
+
+class DebateSettings(BaseModel):
+    enabled: bool = True
+    min_confidence_to_debate: int = 8
+
+
+class CitationSettings(BaseModel):
+    enabled: bool = True
+    auto_repair: bool = True
+
+
+class QuotaSettings(BaseModel):
+    enabled: bool = True
+    max_alerts_per_ticker: int = 2
+    rolling_window_hours: float = 6.0
 
 
 class Settings(BaseModel):
@@ -163,6 +188,11 @@ class Settings(BaseModel):
     llm: LLMSettings = Field(default_factory=LLMSettings)
     telegram: TelegramSettings = Field(default_factory=TelegramSettings)
     watchlist: WatchlistSettings = Field(default_factory=WatchlistSettings)
+    prefilter: PreFilterSettings = Field(default_factory=PreFilterSettings)
+    market_data: MarketDataSettings = Field(default_factory=MarketDataSettings)
+    debate: DebateSettings = Field(default_factory=DebateSettings)
+    citation: CitationSettings = Field(default_factory=CitationSettings)
+    quota: QuotaSettings = Field(default_factory=QuotaSettings)
 
 
 def _expand_env_vars(data: Any) -> Any:

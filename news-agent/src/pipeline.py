@@ -34,6 +34,12 @@ from src.analysis.verification import FactVerificationEngine
 from src.analysis.novelty import NoveltyEngine
 from src.analysis.decision_gate import TwoLayerGateEngine
 from src.analysis.triage import is_economically_relevant
+from src.ingestion.prefilter import NewsPreFilter, PreFilterConfig
+from src.analysis.integer_triage import IntegerIndexTriageEngine, IntegerTriageConfig
+from src.analysis.market_data import TradingViewMarketDataEngine, MarketDataConfig
+from src.analysis.debate import DialecticDebateEngine, DebateConfig
+from src.analysis.citation import CitationGroundingEngine, CitationConfig
+from src.analysis.lifecycle import TickerQuotaTracker, TickerQuotaConfig, SignalLifecycleEngine
 from src.notification.base import BaseNotifier
 from src.notification.telegram import TelegramNotifier
 from src.notification.console import ConsoleNotifier
@@ -117,11 +123,54 @@ class Pipeline:
         batch_notifications: Optional[bool] = None,
         enable_batch_triage: Optional[bool] = None,
         buy_opportunities_only: Optional[bool] = None,
+        prefilter: Optional[NewsPreFilter] = None,
+        integer_triage_engine: Optional[IntegerIndexTriageEngine] = None,
+        market_data_engine: Optional[TradingViewMarketDataEngine] = None,
+        debate_engine: Optional[DialecticDebateEngine] = None,
+        citation_engine: Optional[CitationGroundingEngine] = None,
+        quota_tracker: Optional[TickerQuotaTracker] = None,
+        lifecycle_engine: Optional[SignalLifecycleEngine] = None,
     ) -> None:
         self.settings = settings
         self.force = force
         self.fetch_timeout = fetch_timeout
         self.fetcher = fetcher
+
+        # Institutional optimization engines
+        self.prefilter = prefilter if prefilter is not None else NewsPreFilter(
+            PreFilterConfig(
+                enabled=getattr(settings.prefilter, "enabled", True) if settings and hasattr(settings, "prefilter") else True,
+                drop_sponsored=getattr(settings.prefilter, "drop_sponsored", True) if settings and hasattr(settings, "prefilter") else True,
+                min_title_length=getattr(settings.prefilter, "min_title_length", 15) if settings and hasattr(settings, "prefilter") else 15,
+            )
+        )
+        self.integer_triage_engine = integer_triage_engine if integer_triage_engine is not None else IntegerIndexTriageEngine()
+        self.market_data_engine = market_data_engine if market_data_engine is not None else TradingViewMarketDataEngine(
+            config=MarketDataConfig(
+                enabled=getattr(settings.market_data, "enabled", True) if settings and hasattr(settings, "market_data") else True,
+                fetch_timeout_sec=getattr(settings.market_data, "fetch_timeout_sec", 3.0) if settings and hasattr(settings, "market_data") else 3.0,
+            )
+        )
+        self.debate_engine = debate_engine if debate_engine is not None else DialecticDebateEngine(
+            config=DebateConfig(
+                enabled=getattr(settings.debate, "enabled", True) if settings and hasattr(settings, "debate") else True,
+                min_confidence_to_debate=getattr(settings.debate, "min_confidence_to_debate", 8) if settings and hasattr(settings, "debate") else 8,
+            )
+        )
+        self.citation_engine = citation_engine if citation_engine is not None else CitationGroundingEngine(
+            config=CitationConfig(
+                enabled=getattr(settings.citation, "enabled", True) if settings and hasattr(settings, "citation") else True,
+                auto_repair=getattr(settings.citation, "auto_repair", True) if settings and hasattr(settings, "citation") else True,
+            )
+        )
+        self.quota_tracker = quota_tracker if quota_tracker is not None else TickerQuotaTracker(
+            config=TickerQuotaConfig(
+                enabled=getattr(settings.quota, "enabled", True) if settings and hasattr(settings, "quota") else True,
+                max_alerts_per_ticker=getattr(settings.quota, "max_alerts_per_ticker", 2) if settings and hasattr(settings, "quota") else 2,
+                rolling_window_hours=getattr(settings.quota, "rolling_window_hours", 6.0) if settings and hasattr(settings, "quota") else 6.0,
+            )
+        )
+        self.lifecycle_engine = lifecycle_engine if lifecycle_engine is not None else SignalLifecycleEngine()
 
         # Batch triage screening toggle (low-token batch screening for catalyst candidates)
         if enable_batch_triage is not None:
@@ -399,6 +448,14 @@ class Pipeline:
                 )
                 return False
 
+        # 8. Ticker Fair-Share Quota
+        if analysis.affected_tickers and not self.alert_on_all and getattr(self, "quota_tracker", None) is not None:
+            for ticker in analysis.affected_tickers:
+                allowed, reason = self.quota_tracker.check_quota(ticker, analysis.impact_grade)
+                if not allowed:
+                    logger.info("Alert suppressed for %s: ticker quota exceeded (%s)", ticker, reason)
+                    return False
+
         return True
 
     def is_buy_opportunity(self, analysis: MarketImpactAnalysis) -> bool:
@@ -540,6 +597,10 @@ class Pipeline:
         fetched_count = len(articles)
         if not articles:
             return CycleSummary(fetched=0, new_unseen=0, analyzed=0, alerted=0, errors=0)
+
+        # 0. Noise Pre-filtering: Drop clickbait, sponsored PR wires, and malformed items
+        if getattr(self, "prefilter", None) is not None:
+            articles = [a for a in articles if not self.prefilter.is_noise(a)]
 
         # 1. Recency Filtering: discard articles older than max_article_age_minutes
         if self.max_article_age_minutes and self.max_article_age_minutes > 0:
@@ -986,6 +1047,33 @@ class Pipeline:
                 )
                 gate_min_event = 6.0
 
+            # Strip non-tradeable ticker acronyms
+            if analysis.affected_tickers and getattr(self, "prefilter", None) is not None:
+                analysis.affected_tickers = self.prefilter.filter_tickers(analysis.affected_tickers)
+
+            # Adversarial Dialectic Debate for high-conviction catalysts
+            if getattr(self, "debate_engine", None) is not None and self.debate_engine.should_debate(analysis):
+                try:
+                    market_ctx_str = ""
+                    if getattr(self, "market_data_engine", None) is not None and analysis.affected_tickers:
+                        market_ctx_str = self.market_data_engine.format_prompt_context(analysis.affected_tickers)
+                    verdict = self.debate_engine.conduct_debate(analysis, canonical, market_ctx_str)
+                    analysis.confidence_score = verdict.net_conviction_score
+                    if verdict.invalidation_triggers and analysis.causal_chain:
+                        existing_c = analysis.causal_chain.counterarguments or ""
+                        sep = " | " if existing_c else ""
+                        analysis.causal_chain.counterarguments = f"{existing_c}{sep}Invalidation: {'; '.join(verdict.invalidation_triggers)}"
+                except Exception as debate_err:
+                    logger.debug("Debate engine skipped: %s", debate_err)
+
+            # Factual citation & grounding verification
+            if getattr(self, "citation_engine", None) is not None:
+                body_to_verify = canonical.content or canonical.summary or ""
+                cit_res = self.citation_engine.verify_grounding(analysis.catalyst_thesis, body_to_verify)
+                if not cit_res.is_grounded and cit_res.unsupported_claims:
+                    logger.info("Thesis figures uncorroborated by article text: %s", cit_res.unsupported_claims)
+                    analysis.confidence_score = max(1, analysis.confidence_score - 1)
+
             gate_decision = self.gate_engine.evaluate_gates(
                 analysis,
                 min_event_quality=gate_min_event,
@@ -1055,6 +1143,9 @@ class Pipeline:
                     if alert_delivered:
                         alerted_count += 1
                         self._record_delivered_recommendation(canonical, analysis)
+                        if getattr(self, "quota_tracker", None) is not None and analysis.affected_tickers:
+                            for sym in analysis.affected_tickers:
+                                self.quota_tracker.record_alert(sym, analysis.impact_grade)
             else:
                 logger.info(
                     "Article '%s' (%s) routed to storage without alert (status=%s, score=%d, alerted=False).",
@@ -1135,6 +1226,9 @@ class Pipeline:
                     except Exception as exc:
                         logger.error("Error updating alerted status for '%s': %s", art.title, exc)
                     self._record_delivered_recommendation(art, ana)
+                    if getattr(self, "quota_tracker", None) is not None and ana.affected_tickers:
+                        for sym in ana.affected_tickers:
+                            self.quota_tracker.record_alert(sym, ana.impact_grade)
 
         return CycleSummary(
             fetched=fetched_count,
